@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chart history test</title>
+<style>
+  body{background:#0d1117;color:#e6edf3;font-family:-apple-system,Helvetica,Arial,sans-serif;margin:0;padding:12px;font-size:12px}
+  h2{font-size:15px;margin:14px 0 4px;color:#58a6ff}
+  pre{background:#161b22;padding:8px;border-radius:6px;white-space:pre-wrap;word-break:break-word;margin:0}
+</style>
+</head>
+<body>
+<h1 style="font-size:18px">Chart history test</h1>
+<div id="out">Loading...</div>
+<script>
+var BASE = "https://scanner-relay.tanbir-eam-6ff.workers.dev";
+function asList(x){ if(Array.isArray(x)) return x; if(x && Array.isArray(x.data)) return x.data; return []; }
+function sec(t, o){ return "<h2>" + t + "</h2><pre>" + (typeof o === "string" ? o : JSON.stringify(o, null, 1)) + "</pre>"; }
+async function go(){
+  var out = document.getElementById("out");
+  var html = "";
+  try{
+    var specs = asList(await fetch(BASE + "/product/specs/?active=true").then(function(r){return r.json();}));
+    var p = specs.filter(function(s){ return s.symbol === "PETHULZ50"; })[0];
+    html += sec("Product", p ? (p.symbol + " id " + p.product_id) : "PETHULZ50 not found");
+    if (!p){ out.innerHTML = html; return; }
+    var begin = new Date(Date.now() - 6*3600*1000).toISOString();
+    var r = await fetch(BASE + "/web/charts/price/" + p.product_id + "?begin_time=" + begin + "&end_time=now");
+    html += sec("HTTP status", String(r.status));
+    var txt = await r.text();
+    var j; try { j = JSON.parse(txt); } catch(e){ j = null; }
+    if (!j){ html += sec("Raw start of reply", txt.slice(0, 600)); out.innerHTML = html; return; }
+    var list = asList(j);
+    html += sec("Rows returned (last 6 hours)", String(list.length));
+    html += sec("First 3 rows", list.slice(0, 3));
+    html += sec("Last 3 rows", list.slice(-3));
+    if (list.length === 0) html += sec("Raw start of reply", txt.slice(0, 600));
+    out.innerHTML = html;
+  } catch(e){
+    out.innerHTML = html + sec("FAILED", e.message);
+  }
+}
+go();
+</script>
+</body>
+</html>
