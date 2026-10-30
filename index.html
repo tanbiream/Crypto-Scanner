@@ -57,7 +57,7 @@ function rsi(a, n){
 }
 function fmt(v, dp){ return v === null || v === undefined ? "n/a" : Number(v).toLocaleString(undefined, {maximumFractionDigits: dp === undefined ? 4 : dp}); }
 function usd(v){ return v === null ? "n/a" : "$" + Math.round(v).toLocaleString(); }
-function ageText(s){ if (s < 90) return s + "s"; if (s < 5400) return Math.round(s/60) + "m"; return Math.round(s/3600) + "h"; }
+function ageText(s){ s = Math.round(s); if (s < 90) return s + "s"; if (s < 5400) return Math.round(s/60) + "m"; return Math.round(s/3600) + "h"; }
 function setStatus(cls, t){ var s = document.getElementById("status"); s.className = "bar " + cls; s.textContent = t; }
 
 function drawTabs(){
