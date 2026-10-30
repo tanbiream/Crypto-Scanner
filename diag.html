@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diagnostic</title>
+<style>
+  body{background:#0d1117;color:#e6edf3;font-family:-apple-system,Helvetica,Arial,sans-serif;margin:0;padding:12px;font-size:12px}
+  h2{font-size:15px;margin:14px 0 4px;color:#58a6ff}
+  pre{background:#161b22;padding:8px;border-radius:6px;white-space:pre-wrap;word-break:break-word;margin:0}
+</style>
+</head>
+<body>
+<h1 style="font-size:18px">Diagnostic (raw Bitnomial data)</h1>
+<div id="out">Loading...</div>
+<script>
+var BASE = "https://scanner-relay.tanbir-eam-6ff.workers.dev";
+function asList(x){ if(Array.isArray(x)) return x; if(x && Array.isArray(x.data)) return x.data; return []; }
+function sec(title, obj){
+  return "<h2>" + title + "</h2><pre>" +
+    (typeof obj === "string" ? obj : JSON.stringify(obj, null, 1)) + "</pre>";
+}
+async function go(){
+  var out = document.getElementById("out");
+  try{
+    var rs = await Promise.all([
+      fetch(BASE + "/product/data/?active=true").then(function(r){return r.json();}),
+      fetch(BASE + "/product/specs/?active=true").then(function(r){return r.json();})
+    ]);
+    var data = asList(rs[0]), specs = asList(rs[1]);
+    var html = "";
+    html += sec("Counts", "products: " + data.length + ", specs: " + specs.length);
+    var methods = {}, types = {};
+    specs.forEach(function(s){
+      methods[s.settlement_method] = (methods[s.settlement_method]||0)+1;
+      types[s.type] = (types[s.type]||0)+1;
+    });
+    html += sec("Settlement methods", methods);
+    html += sec("Types", types);
+    var btc = specs.filter(function(s){ return s.symbol === "BTCUSD"; })[0];
+    html += sec("BTCUSD spec", btc || "not found");
+    if (btc){
+      var d = data.filter(function(x){ return x.product_id === btc.product_id; })[0];
+      html += sec("BTCUSD data", d || "not found");
+    }
+    var perps = specs.filter(function(s){
+      return !/[FGHJKMNQUVXZ]\d\d$/.test(s.symbol);
+    }).map(function(s){ return s.symbol + " | " + s.product_name; });
+    html += sec("Symbols without a month-year ending (" + perps.length + ")", perps.join("\n"));
+    out.innerHTML = html;
+  } catch(e){
+    out.textContent = "FAILED: " + e.message;
+  }
+}
+go();
+</script>
+</body>
+</html>
