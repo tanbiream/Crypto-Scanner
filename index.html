@@ -3,91 +3,169 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Crypto Scanner - Connection Test</title>
+<title>Crypto Futures Scanner</title>
 <style>
-  body{background:#0d1117;color:#e6edf3;font-family:-apple-system,Helvetica,Arial,sans-serif;margin:0;padding:16px}
-  h1{font-size:20px;margin:0 0 4px}
-  .sub{color:#8b949e;font-size:13px;margin-bottom:12px}
-  .status{padding:10px;border-radius:8px;margin-bottom:12px;font-size:14px}
+  body{background:#0d1117;color:#e6edf3;font-family:-apple-system,Helvetica,Arial,sans-serif;margin:0;padding:12px;font-size:13px}
+  h1{font-size:18px;margin:0 0 2px}
+  .sub{color:#8b949e;font-size:12px;margin-bottom:10px}
+  .bar{padding:9px;border-radius:8px;margin-bottom:10px}
   .ok{background:#12351f;color:#3fb950}
   .bad{background:#3d1417;color:#f85149}
   .wait{background:#2a2410;color:#d29922}
-  table{width:100%;border-collapse:collapse;font-size:13px}
-  th,td{text-align:left;padding:6px 4px;border-bottom:1px solid #21262d}
+  .tabs button{background:#21262d;color:#e6edf3;border:0;border-radius:8px;padding:8px 14px;font-size:14px;margin-right:6px}
+  .tabs button.on{background:#238636}
+  .wrap{overflow-x:auto;margin-top:10px}
+  table{border-collapse:collapse;min-width:100%}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid #21262d;white-space:nowrap}
   th{color:#8b949e;font-weight:600}
-  button{background:#238636;color:#fff;border:0;border-radius:8px;padding:10px 16px;font-size:15px;margin-bottom:12px}
+  .up{color:#3fb950}.dn{color:#f85149}.mut{color:#8b949e}
+  .warn{color:#8b949e;font-size:11px;margin-top:12px;line-height:1.5}
 </style>
 </head>
 <body>
-<h1>Connection Test</h1>
-<div class="sub">Data source: Bitnomial Exchange (CFTC-regulated). Nothing here is simulated.</div>
-<button onclick="run()">Test again</button>
-<div id="status" class="status wait">Starting...</div>
-<div id="out"></div>
-
+<h1>Crypto Futures Scanner</h1>
+<div class="sub">Source: Bitnomial (CFTC-regulated), perpetuals only. Mark-price snapshots recorded every minute. Analysis only, no trading.</div>
+<div class="tabs" id="tabs"></div>
+<div id="status" class="bar wait">Loading...</div>
+<div class="wrap" id="out"></div>
+<div class="warn">Candles are built from one recorded price per minute, so 1-minute candles have no wicks. Indicators show "warming up" until enough history exists. These are technical readings, not predictions. Leveraged futures can lose more than you put in. This is not financial advice.</div>
 <script>
 var BASE = "https://scanner-relay.tanbir-eam-6ff.workers.dev";
+var tf = 1, cache = null;
 
-function asList(x){
-  if (Array.isArray(x)) return x;
-  if (x && Array.isArray(x.data)) return x.data;
-  return [];
+function asList(x){ if(Array.isArray(x)) return x; if(x && Array.isArray(x.data)) return x.data; return []; }
+function ema(a, n){
+  if (a.length < n) return null;
+  var k = 2/(n+1), e = 0, i;
+  for (i = 0; i < n; i++) e += a[i];
+  e /= n;
+  for (i = n; i < a.length; i++) e = a[i]*k + e*(1-k);
+  return e;
 }
-
-async function getJSON(path){
-  var r = await fetch(BASE + path);
-  if (!r.ok) throw new Error("HTTP " + r.status + " from " + path);
-  return r.json();
+function rsi(a, n){
+  if (a.length < n+1) return null;
+  var g = 0, l = 0, i, d;
+  for (i = 1; i <= n; i++){ d = a[i]-a[i-1]; if (d >= 0) g += d; else l -= d; }
+  g /= n; l /= n;
+  for (i = n+1; i < a.length; i++){
+    d = a[i]-a[i-1];
+    g = (g*(n-1) + (d > 0 ? d : 0))/n;
+    l = (l*(n-1) + (d < 0 ? -d : 0))/n;
+  }
+  return l === 0 ? 100 : 100 - 100/(1 + g/l);
 }
+function fmt(v, dp){ return v === null || v === undefined ? "n/a" : Number(v).toLocaleString(undefined, {maximumFractionDigits: dp === undefined ? 4 : dp}); }
+function usd(v){ return v === null ? "n/a" : "$" + Math.round(v).toLocaleString(); }
 
-function setStatus(cls, text){
-  var s = document.getElementById("status");
-  s.className = "status " + cls;
-  s.textContent = text;
+function setStatus(cls, t){ var s = document.getElementById("status"); s.className = "bar " + cls; s.textContent = t; }
+
+function drawTabs(){
+  var h = "";
+  [1,3,5].forEach(function(n){
+    h += "<button class='" + (n === tf ? "on" : "") + "' onclick='pick(" + n + ")'>" + n + "m</button>";
+  });
+  document.getElementById("tabs").innerHTML = h;
 }
+function pick(n){ tf = n; drawTabs(); if (cache) render(cache); }
 
-async function run(){
-  setStatus("wait", "Contacting Bitnomial...");
-  document.getElementById("out").innerHTML = "";
+async function load(){
   try{
-    var results = await Promise.all([
-      getJSON("/product/data/?active=true"),
-      getJSON("/product/specs/?active=true")
+    var rs = await Promise.all([
+      fetch(BASE + "/recorder/history?minutes=1440").then(function(r){ return r.json(); }),
+      fetch(BASE + "/product/specs/?active=true").then(function(r){ return r.json(); })
     ]);
-    var data = asList(results[0]);
-    var specs = asList(results[1]);
-
-    var specById = {};
-    specs.forEach(function(s){ specById[s.product_id] = s; });
-
-    var rows = data.map(function(d){
-      var s = specById[d.product_id] || {};
-      var inc = s.price_increment || 1;
-      var price = (d.last_price !== null && d.last_price !== undefined) ? (d.last_price * inc) : null;
-      return {
-        symbol: s.symbol || ("id " + d.product_id),
-        price: price,
-        change: d.price_change,
-        oi: d.open_interest
-      };
-    });
-
-    var html = "<table><tr><th>Symbol</th><th>Last price (USD)</th><th>24h %</th><th>Open int. (daily)</th></tr>";
-    rows.slice(0, 25).forEach(function(r){
-      html += "<tr><td>" + r.symbol + "</td><td>" +
-        (r.price === null ? "n/a" : r.price.toLocaleString()) + "</td><td>" +
-        (r.change === null || r.change === undefined ? "n/a" : r.change.toFixed(2)) + "</td><td>" +
-        (r.oi === null || r.oi === undefined ? "n/a" : r.oi) + "</td></tr>";
-    });
-    html += "</table>";
-    document.getElementById("out").innerHTML = html;
-
-    setStatus("ok", "LIVE: " + data.length + " active products loaded from Bitnomial at " + new Date().toLocaleTimeString());
+    cache = { hist: rs[0], specs: asList(rs[1]) };
+    render(cache);
   } catch(e){
-    setStatus("bad", "FAILED: " + e.message + " (data unavailable, nothing is being shown)");
+    setStatus("bad", "DATA UNAVAILABLE: " + e.message + ". No signals are shown.");
+    document.getElementById("out").innerHTML = "";
   }
 }
-run();
+
+function render(c){
+  var hist = c.hist;
+  if (!hist.length){ setStatus("wait", "No recorded data yet."); return; }
+  var specById = {};
+  c.specs.forEach(function(s){
+    if (s.type === "perpetual") specById[s.product_id] = {
+      sym: s.symbol,
+      coin: s.product_name.replace(/^Perpetual /, "").replace(/ US Dollar.*$/, ""),
+      cs: s.contract_size
+    };
+  });
+
+  var series = {};
+  hist.forEach(function(snap){
+    var ts = snap[0], rows = snap[1];
+    rows.forEach(function(r){
+      if (r[1] === null || !specById[r[0]]) return;
+      var s = series[r[0]] || (series[r[0]] = { ts: [], mark: [], vol: [], oi: null, fund: null });
+      s.ts.push(ts); s.mark.push(r[1]); s.vol.push(r[4] || 0);
+      s.oi = r[5]; s.fund = r[6];
+    });
+  });
+
+  var best = {};
+  Object.keys(series).forEach(function(id){
+    var s = series[id], sp = specById[id];
+    var last = s.mark.length - 1;
+    var notional = s.vol[last] * sp.cs * s.mark[last];
+    var cur = best[sp.coin];
+    if (!cur || notional > cur.notional) best[sp.coin] = { id: id, notional: notional, sp: sp, s: s };
+  });
+
+  var lastTs = hist[hist.length - 1][0];
+  var age = Math.floor(Date.now()/1000) - lastTs;
+  var stale = age > 150;
+  if (stale) setStatus("bad", "STALE: newest data is " + age + " seconds old. Signals are turned off.");
+  else setStatus("ok", "LIVE: newest snapshot " + age + "s old. History: " + hist.length + " minutes recorded.");
+
+  var list = Object.keys(best).map(function(k){ return best[k]; })
+    .sort(function(a,b){ return b.notional - a.notional; });
+
+  var h = "<table><tr><th>Coin</th><th>Contract</th><th>Mark (USD)</th><th>1h chg</th><th>Bars</th><th>Trend</th><th>RSI 14</th><th>Rel. volume</th><th>Day volume</th><th>OI (daily)</th><th>Funding</th></tr>";
+  list.forEach(function(x){
+    var s = x.s, closes = [], i;
+    for (i = 0; i < s.ts.length; i++) if ((s.ts[i]/60) % tf === 0) closes.push(s.mark[i]);
+    var m = s.mark[s.mark.length - 1];
+
+    var chg = null, target = s.ts[s.ts.length - 1] - 3600;
+    for (i = 0; i < s.ts.length; i++) if (s.ts[i] >= target){ if (s.ts[i] - target < 120) chg = (m / s.mark[i] - 1) * 100; break; }
+
+    var trend = "warming up", rs = null;
+    if (!stale){
+      var e9 = ema(closes, 9), e20 = ema(closes, 20), e50 = ema(closes, 50);
+      if (e9 !== null && e20 !== null){
+        if (e50 !== null) trend = (e9 > e20 && e20 > e50) ? "<span class='up'>up</span>" : (e9 < e20 && e20 < e50) ? "<span class='dn'>down</span>" : "mixed";
+        else trend = (e9 > e20) ? "<span class='up'>up (short)</span>" : "<span class='dn'>down (short)</span>";
+      }
+      rs = rsi(closes, 14);
+    } else trend = "stale";
+
+    var d = [];
+    for (i = 1; i < s.vol.length; i++) d.push(Math.max(0, s.vol[i] - s.vol[i-1]));
+    var rel = null;
+    if (!stale && d.length >= 30){
+      var rec = d.slice(-5), base = d.slice(-65, -5);
+      var ra = rec.reduce(function(a,b){return a+b;}, 0)/rec.length;
+      var ba = base.reduce(function(a,b){return a+b;}, 0)/base.length;
+      if (ba > 0) rel = ra / ba;
+    }
+
+    var thin = x.notional < 100000;
+    h += "<tr><td>" + x.sp.coin + (thin ? " <span class='mut'>(thin)</span>" : "") + "</td><td>" + x.sp.sym + "</td><td>" + fmt(m) + "</td><td>" +
+      (chg === null ? "<span class='mut'>warming up</span>" : "<span class='" + (chg >= 0 ? "up" : "dn") + "'>" + chg.toFixed(2) + "%</span>") + "</td><td>" + closes.length + "</td><td>" + trend + "</td><td>" +
+      (rs === null ? "<span class='mut'>warming up</span>" : rs.toFixed(0)) + "</td><td>" +
+      (rel === null ? "<span class='mut'>warming up</span>" : rel.toFixed(1) + "x") + "</td><td>" + usd(x.notional) + "</td><td>" + fmt(s.oi, 0) + "</td><td>" +
+      (s.fund === null ? "n/a" : s.fund) + "</td></tr>";
+  });
+  h += "</table>";
+  document.getElementById("out").innerHTML = h;
+}
+
+drawTabs();
+load();
+setInterval(load, 30000);
 </script>
 </body>
 </html>
