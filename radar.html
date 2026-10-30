@@ -104,7 +104,10 @@ function analyze(hist){
     for (i = 1; i < n; i++){
       gap = (o.ts[i] - o.ts[i-1]) / 60;
       d = o.vol[i] - o.vol[i-1];
-      if (d < 0) d = 0;
+      var cur = o.vol[i];
+      if (new Date(o.ts[i] * 1000).getUTCDate() !== new Date(o.ts[i-1] * 1000).getUTCDate()) o.vmax = cur;
+      d = Math.max(0, cur - (o.vmax === undefined ? o.vol[i-1] : o.vmax));
+      if (o.vmax === undefined || cur > o.vmax) o.vmax = cur;
       if (o.ts[i] > lastTs - 300){ recU += d * o.px[i]; recM += gap; }
       else if (o.ts[i] > lastTs - 3900){ baseU += d * o.px[i]; baseM += gap; }
     }
