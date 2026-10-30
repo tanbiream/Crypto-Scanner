@@ -24,11 +24,11 @@
 </head>
 <body>
 <h1>Crypto Futures Scanner</h1>
-<div class="sub">Source: Bitnomial (CFTC-regulated), perpetuals only. Mark-price snapshots recorded every minute. Analysis only, no trading.</div>
+<div class="sub">Source: Bitnomial (CFTC-regulated), perpetuals only. Last-traded price sampled every minute. Analysis only, no trading.</div>
 <div class="tabs" id="tabs"></div>
 <div id="status" class="bar wait">Loading...</div>
 <div class="wrap" id="out"></div>
-<div class="warn">Candles are built from one recorded price per minute, so 1-minute candles have no wicks. Indicators show "warming up" until enough history exists. These are technical readings, not predictions. Leveraged futures can lose more than you put in. This is not financial advice.</div>
+<div class="warn">Candles are built from one sampled last-trade price per minute, so they have no wicks. Volume, open interest and mark price are only updated by the exchange at daily settlement, so volume-based signals are unavailable. Indicators show "warming up" until enough history exists. "Quiet" means no recent trade, so no reading is given. These are technical readings, not predictions. Leveraged futures can lose more than you put in. This is not financial advice.</div>
 <script>
 var BASE = "https://scanner-relay.tanbir-eam-6ff.workers.dev";
 var tf = 1, cache = null;
@@ -52,11 +52,12 @@ function rsi(a, n){
     g = (g*(n-1) + (d > 0 ? d : 0))/n;
     l = (l*(n-1) + (d < 0 ? -d : 0))/n;
   }
+  if (g === 0 && l === 0) return null;
   return l === 0 ? 100 : 100 - 100/(1 + g/l);
 }
 function fmt(v, dp){ return v === null || v === undefined ? "n/a" : Number(v).toLocaleString(undefined, {maximumFractionDigits: dp === undefined ? 4 : dp}); }
 function usd(v){ return v === null ? "n/a" : "$" + Math.round(v).toLocaleString(); }
-
+function ageText(s){ if (s < 90) return s + "s"; if (s < 5400) return Math.round(s/60) + "m"; return Math.round(s/3600) + "h"; }
 function setStatus(cls, t){ var s = document.getElementById("status"); s.className = "bar " + cls; s.textContent = t; }
 
 function drawTabs(){
@@ -94,70 +95,69 @@ function render(c){
     };
   });
 
+  var lastTs = hist[hist.length - 1][0];
+  var nowSec = Math.floor(Date.now()/1000);
+  var age = nowSec - lastTs;
+  var stale = age > 150;
+  if (stale) setStatus("bad", "STALE: newest recorded data is " + age + " seconds old. Signals are turned off.");
+  else setStatus("ok", "LIVE: newest snapshot " + age + "s old. History: " + hist.length + " minutes recorded.");
+
   var series = {};
   hist.forEach(function(snap){
     var ts = snap[0], rows = snap[1];
     rows.forEach(function(r){
-      if (r[1] === null || !specById[r[0]]) return;
-      var s = series[r[0]] || (series[r[0]] = { ts: [], mark: [], vol: [], oi: null, fund: null });
-      s.ts.push(ts); s.mark.push(r[1]); s.vol.push(r[4] || 0);
-      s.oi = r[5]; s.fund = r[6];
+      if (r[2] === null || !specById[r[0]]) return;
+      var s = series[r[0]] || (series[r[0]] = { ts: [], px: [], tt: [], oi: null, fund: null, vol: 0 });
+      s.ts.push(ts); s.px.push(r[2]); s.tt.push(r[3] ? Date.parse(r[3]) / 1000 : 0);
+      s.oi = r[5]; s.fund = r[6]; s.vol = r[4] || 0;
     });
   });
 
   var best = {};
   Object.keys(series).forEach(function(id){
     var s = series[id], sp = specById[id];
-    var last = s.mark.length - 1;
-    var notional = s.vol[last] * sp.cs * s.mark[last];
+    var seen = {}, n = 0, i;
+    for (i = 0; i < s.ts.length; i++){
+      if (s.ts[i] >= lastTs - 3600 && s.tt[i] > 0 && !seen[s.tt[i]]){ seen[s.tt[i]] = 1; n++; }
+    }
+    var px = s.px[s.px.length - 1];
+    var notional = s.vol * sp.cs * px;
     var cur = best[sp.coin];
-    if (!cur || notional > cur.notional) best[sp.coin] = { id: id, notional: notional, sp: sp, s: s };
+    if (!cur || n > cur.trades || (n === cur.trades && notional > cur.notional))
+      best[sp.coin] = { id: id, trades: n, notional: notional, sp: sp, s: s };
   });
 
-  var lastTs = hist[hist.length - 1][0];
-  var age = Math.floor(Date.now()/1000) - lastTs;
-  var stale = age > 150;
-  if (stale) setStatus("bad", "STALE: newest data is " + age + " seconds old. Signals are turned off.");
-  else setStatus("ok", "LIVE: newest snapshot " + age + "s old. History: " + hist.length + " minutes recorded.");
-
   var list = Object.keys(best).map(function(k){ return best[k]; })
-    .sort(function(a,b){ return b.notional - a.notional; });
+    .sort(function(a,b){ return b.trades - a.trades || b.notional - a.notional; });
 
-  var h = "<table><tr><th>Coin</th><th>Contract</th><th>Mark (USD)</th><th>1h chg</th><th>Bars</th><th>Trend</th><th>RSI 14</th><th>Rel. volume</th><th>Day volume</th><th>OI (daily)</th><th>Funding</th></tr>";
+  var h = "<table><tr><th>Coin</th><th>Contract</th><th>Last trade (USD)</th><th>Trade age</th><th>1h chg</th><th>Bars</th><th>Trend</th><th>RSI 14</th><th>Trades (1h)</th><th>Rel. volume</th><th>OI (daily)</th><th>Funding</th></tr>";
   list.forEach(function(x){
     var s = x.s, closes = [], i;
-    for (i = 0; i < s.ts.length; i++) if ((s.ts[i]/60) % tf === 0) closes.push(s.mark[i]);
-    var m = s.mark[s.mark.length - 1];
+    for (i = 0; i < s.ts.length; i++) if ((s.ts[i]/60) % tf === 0) closes.push(s.px[i]);
+    var px = s.px[s.px.length - 1];
+    var tAge = nowSec - s.tt[s.tt.length - 1];
+    var quiet = s.tt[s.tt.length - 1] === 0 || tAge > 300;
 
-    var chg = null, target = s.ts[s.ts.length - 1] - 3600;
-    for (i = 0; i < s.ts.length; i++) if (s.ts[i] >= target){ if (s.ts[i] - target < 120) chg = (m / s.mark[i] - 1) * 100; break; }
+    var chg = null, target = lastTs - 3600;
+    for (i = 0; i < s.ts.length; i++) if (s.ts[i] >= target){ if (s.ts[i] - target < 120) chg = (px / s.px[i] - 1) * 100; break; }
 
     var trend = "warming up", rs = null;
-    if (!stale){
+    if (stale) trend = "stale";
+    else if (quiet) trend = "<span class='mut'>quiet</span>";
+    else {
       var e9 = ema(closes, 9), e20 = ema(closes, 20), e50 = ema(closes, 50);
       if (e9 !== null && e20 !== null){
         if (e50 !== null) trend = (e9 > e20 && e20 > e50) ? "<span class='up'>up</span>" : (e9 < e20 && e20 < e50) ? "<span class='dn'>down</span>" : "mixed";
         else trend = (e9 > e20) ? "<span class='up'>up (short)</span>" : "<span class='dn'>down (short)</span>";
       }
       rs = rsi(closes, 14);
-    } else trend = "stale";
-
-    var d = [];
-    for (i = 1; i < s.vol.length; i++) d.push(Math.max(0, s.vol[i] - s.vol[i-1]));
-    var rel = null;
-    if (!stale && d.length >= 30){
-      var rec = d.slice(-5), base = d.slice(-65, -5);
-      var ra = rec.reduce(function(a,b){return a+b;}, 0)/rec.length;
-      var ba = base.reduce(function(a,b){return a+b;}, 0)/base.length;
-      if (ba > 0) rel = ra / ba;
     }
 
-    var thin = x.notional < 100000;
-    h += "<tr><td>" + x.sp.coin + (thin ? " <span class='mut'>(thin)</span>" : "") + "</td><td>" + x.sp.sym + "</td><td>" + fmt(m) + "</td><td>" +
+    h += "<tr><td>" + x.sp.coin + (x.trades < 10 ? " <span class='mut'>(thin)</span>" : "") + "</td><td>" + x.sp.sym + "</td><td>" + fmt(px) + "</td><td>" +
+      (s.tt[s.tt.length - 1] === 0 ? "n/a" : ageText(tAge)) + "</td><td>" +
       (chg === null ? "<span class='mut'>warming up</span>" : "<span class='" + (chg >= 0 ? "up" : "dn") + "'>" + chg.toFixed(2) + "%</span>") + "</td><td>" + closes.length + "</td><td>" + trend + "</td><td>" +
-      (rs === null ? "<span class='mut'>warming up</span>" : rs.toFixed(0)) + "</td><td>" +
-      (rel === null ? "<span class='mut'>warming up</span>" : rel.toFixed(1) + "x") + "</td><td>" + usd(x.notional) + "</td><td>" + fmt(s.oi, 0) + "</td><td>" +
-      (s.fund === null ? "n/a" : s.fund) + "</td></tr>";
+      (rs === null ? "<span class='mut'>" + (stale || quiet ? "n/a" : "warming up") + "</span>" : rs.toFixed(0)) + "</td><td>" + x.trades + "</td><td class='mut'>unavailable</td><td>" +
+      fmt(s.oi, 0) + "</td><td>" + (s.fund === null ? "n/a" : s.fund) + "</td></tr>";
   });
   h += "</table>";
   document.getElementById("out").innerHTML = h;
