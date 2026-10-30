@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pump Radar</title>
+<style>
+  body{background:#0d1117;color:#e6edf3;font-family:-apple-system,Helvetica,Arial,sans-serif;margin:0;padding:12px;font-size:13px}
+  h1{font-size:18px;margin:0 0 2px}
+  .sub{color:#8b949e;font-size:12px;margin-bottom:10px}
+  .bar{padding:9px;border-radius:8px;margin-bottom:10px}
+  .ok{background:#12351f;color:#3fb950}
+  .bad{background:#3d1417;color:#f85149}
+  .wait{background:#2a2410;color:#d29922}
+  .tabs button{background:#21262d;color:#e6edf3;border:0;border-radius:8px;padding:8px 14px;font-size:14px;margin-right:6px}
+  .tabs button.on{background:#238636}
+  .wrap{overflow-x:auto;margin-top:10px}
+  table{border-collapse:collapse;min-width:100%}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid #21262d;white-space:nowrap}
+  th{color:#8b949e;font-weight:600}
+  .up{color:#3fb950}.dn{color:#f85149}.mut{color:#8b949e}.warnc{color:#d29922}
+  a{color:#58a6ff;text-decoration:none}
+  .warn{color:#8b949e;font-size:11px;margin-top:12px;line-height:1.5}
+</style>
+</head>
+<body>
+<h1>Pump Radar</h1>
+<div class="sub">Source: Kraken spot (USD pairs), sampled every minute. Spot data only: no open interest or funding. Analysis only, no trading.</div>
+<div class="tabs" id="tabs"></div>
+<div id="status" class="bar wait">Loading...</div>
+<div class="wrap" id="out"></div>
+<div class="warn">Flags show unusual trading activity that has already started. They do not predict a pump, and most will fade. Thresholds (3x relative volume, 12% moves, $50K daily volume floor) are untested first guesses. Volume is compared with the same coin's own last hour. Low-volume coins can be manipulated: a pump can reverse in seconds. Kraken's daily counters reset at 00:00 UTC (8 PM ET). Leveraged trading can lose more than you put in. This is not financial advice.</div>
+<script>
+var BASE = "https://scanner-relay.tanbir-eam-6ff.workers.dev";
+var view = "flagged", cache = null;
+
+function nameOf(k){
+  var legacy = /ZUSD$/.test(k);
+  var n = k.replace(/ZUSD$/, "").replace(/USD$/, "");
+  if (legacy && n.length === 4 && n.charAt(0) === "X") n = n.slice(1);
+  if (n === "XBT") n = "BTC";
+  if (n === "XDG") n = "DOGE";
+  return n;
+}
+function tvName(n){ return (n === "BTC" ? "XBT" : n === "DOGE" ? "XDG" : n).replace(/[^A-Za-z0-9]/g, ""); }
+function price(v){
+  if (v >= 100) return v.toLocaleString(undefined, {maximumFractionDigits: 2});
+  if (v >= 1) return v.toFixed(3);
+  if (v >= 0.01) return v.toFixed(5);
+  return v.toPrecision(3);
+}
+function money(v){ if (v >= 1e6) return "$" + (v/1e6).toFixed(1) + "M"; if (v >= 1e3) return "$" + Math.round(v/1e3) + "K"; return "$" + Math.round(v); }
+function pct(v){ return v === null ? "<span class='mut'>n/a</span>" : "<span class='" + (v >= 0 ? "up" : "dn") + "'>" + (v >= 0 ? "+" : "") + v.toFixed(2) + "%</span>"; }
+function pxAt(o, target){
+  for (var i = o.ts.length - 1; i >= 0; i--){
+    if (o.ts[i] <= target) return (target - o.ts[i] <= 180) ? o.px[i] : null;
+  }
+  return null;
+}
+function setStatus(cls, t){ var s = document.getElementById("status"); s.className = "bar " + cls; s.textContent = t; }
+
+function drawTabs(){
+  var h = "";
+  [["flagged", "Flagged"], ["all", "All coins"]].forEach(function(x){
+    h += "<button class='" + (x[0] === view ? "on" : "") + "' onclick='pick(\"" + x[0] + "\")'>" + x[1] + "</button>";
+  });
+  document.getElementById("tabs").innerHTML = h;
+}
+function pick(v){ view = v; drawTabs(); if (cache) render(cache); }
+
+async function load(){
+  try{
+    var r = await fetch(BASE + "/radar/history?minutes=75");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    cache = await r.json();
+    render(cache);
+  } catch(e){
+    setStatus("bad", "DATA UNAVAILABLE: " + e.message + ". No flags are shown.");
+    document.getElementById("out").innerHTML = "";
+  }
+}
+
+function analyze(hist){
+  var firstTs = hist[0][0], lastTs = hist[hist.length - 1][0];
+  var by = {};
+  hist.forEach(function(sn){
+    sn[1].forEach(function(r){
+      if (r[0].indexOf(".") >= 0) return;
+      var o = by[r[0]] || (by[r[0]] = { ts: [], px: [], vol: [], v24: [], open: null });
+      o.ts.push(sn[0]); o.px.push(r[1]); o.vol.push(r[2]); o.v24.push(r[3]); o.open = r[5];
+    });
+  });
+  var spanOk = (lastTs - firstTs) >= 45 * 60;
+  var out = [];
+  Object.keys(by).forEach(function(k){
+    var o = by[k], n = o.ts.length, i, gap, d;
+    if (o.ts[n-1] !== lastTs) return;
+    var px = o.px[n-1];
+    var usd24 = o.v24[n-1] * px;
+    if (!(usd24 >= 50000)) return;
+
+    var recU = 0, recM = 0, baseU = 0, baseM = 0, hi = null, lo = null;
+    for (i = 1; i < n; i++){
+      gap = (o.ts[i] - o.ts[i-1]) / 60;
+      d = o.vol[i] - o.vol[i-1];
+      if (d < 0) d = o.vol[i];
+      if (o.ts[i] > lastTs - 300){ recU += d * o.px[i]; recM += gap; }
+      else if (o.ts[i] > lastTs - 3900){ baseU += d * o.px[i]; baseM += gap; }
+    }
+    for (i = 0; i < n; i++){
+      if (o.ts[i] >= lastTs - 3900 && o.ts[i] < lastTs - 300){
+        if (hi === null || o.px[i] > hi) hi = o.px[i];
+        if (lo === null || o.px[i] < lo) lo = o.px[i];
+      }
+    }
+    var recR = recM > 0 ? recU / recM : null, baseR = baseM > 0 ? baseU / baseM : null;
+    var rel = (recR !== null && baseR !== null && baseR > 0) ? recR / baseR : null;
+    var ready = spanOk && baseM >= 30 && recM >= 3;
+
+    var p5 = pxAt(o, lastTs - 300), p15 = pxAt(o, lastTs - 900), p60 = pxAt(o, lastTs - 3600);
+    var c5 = p5 ? (px / p5 - 1) * 100 : null;
+    var c15 = p15 ? (px / p15 - 1) * 100 : null;
+    var c60 = p60 ? (px / p60 - 1) * 100 : null;
+    var fromOpen = o.open > 0 ? (px / o.open - 1) * 100 : null;
+
+    var label = "", warn = "";
+    if (ready && rel !== null && recU >= 2000 && c5 !== null && c15 !== null){
+      if (rel >= 3 && Math.abs(c15) > 12) label = c15 > 0 ? "Extended up" : "Extended down";
+      else if (hi !== null && px > hi && rel >= 2) label = "Breakout";
+      else if (lo !== null && px < lo && rel >= 2) label = "Breakdown";
+      else if (rel >= 3 && c15 >= 1 && c5 > 0) label = "Potential pump";
+      else if (rel >= 3 && c15 <= -1 && c5 < 0) label = "Potential dump";
+      else if (rel >= 2 && Math.abs(c15) < 1) label = "Volume up, price flat";
+    }
+    if (c60 !== null && Math.abs(c60) >= 12) warn = "Moved " + c60.toFixed(0) + "% in 1h: do not chase";
+    else if (fromOpen !== null && fromOpen >= 30) warn = "Up " + fromOpen.toFixed(0) + "% today: do not chase";
+
+    out.push({ k: k, name: nameOf(k), px: px, c5: c5, c15: c15, c60: c60, fromOpen: fromOpen,
+               rel: rel, recU: recU, usd24: usd24, label: label, warn: warn, ready: ready });
+  });
+  return { rows: out, lastTs: lastTs, spanMin: Math.round((lastTs - firstTs) / 60) };
+}
+
+function render(hist){
+  if (!hist.length){ setStatus("wait", "No radar data recorded yet."); return; }
+  var a = analyze(hist);
+  var age = Math.floor(Date.now() / 1000) - a.lastTs;
+  var stale = age > 150;
+  var rows = a.rows;
+  if (stale){
+    setStatus("bad", "STALE: newest data is " + age + " seconds old. Flags are turned off.");
+    rows.forEach(function(r){ r.label = ""; r.warn = ""; });
+  }
+  var anyReady = rows.some(function(r){ return r.ready; });
+  var flagged = rows.filter(function(r){ return r.label !== ""; }).length;
+  if (!stale){
+    if (!anyReady) setStatus("wait", "Warming up: " + a.spanMin + " minutes of history. Flags start after about 45 minutes.");
+    else setStatus("ok", "LIVE: newest snapshot " + age + "s old. " + rows.length + " liquid coins scanned, " + flagged + " flagged.");
+  }
+
+  rows.sort(function(x, y){
+    if ((x.label !== "") !== (y.label !== "")) return x.label !== "" ? -1 : 1;
+    return (y.rel === null ? -1 : y.rel) - (x.rel === null ? -1 : x.rel);
+  });
+  var show = view === "flagged" ? rows.filter(function(r){ return r.label !== "" || r.warn !== ""; }) : rows.slice(0, 80);
+
+  var h = "<table><tr><th>Coin</th><th>Price (USD)</th><th>5m</th><th>15m</th><th>1h</th><th>Today</th><th>Rel. volume</th><th>Vol last 5m</th><th>24h volume</th><th>Signal</th><th>Warning</th></tr>";
+  show.forEach(function(r){
+    var lc = (r.label === "Potential pump" || r.label === "Breakout") ? "up" : (r.label === "Potential dump" || r.label === "Breakdown") ? "dn" : (r.label ? "warnc" : "mut");
+    h += "<tr><td><a href='https://www.tradingview.com/chart/?symbol=KRAKEN%3A" + tvName(r.name) + "USD' target='_blank'>" + r.name + "</a></td><td>" + price(r.px) + "</td><td>" +
+      pct(r.c5) + "</td><td>" + pct(r.c15) + "</td><td>" + pct(r.c60) + "</td><td>" + pct(r.fromOpen) + "</td><td>" +
+      (r.rel === null ? "<span class='mut'>n/a</span>" : r.rel.toFixed(1) + "x") + "</td><td>" + money(r.recU) + "</td><td>" + money(r.usd24) + "</td><td class='" + lc + "'>" +
+      (r.label || "none") + "</td><td class='warnc'>" + r.warn + "</td></tr>";
+  });
+  if (!show.length) h += "<tr><td colspan='11' class='mut'>Nothing flagged right now. That is normal in a quiet market.</td></tr>";
+  h += "</table>";
+  document.getElementById("out").innerHTML = h;
+}
+
+drawTabs();
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>
