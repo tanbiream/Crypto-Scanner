@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crypto Scanner - Connection Test</title>
+<style>
+  body{background:#0d1117;color:#e6edf3;font-family:-apple-system,Helvetica,Arial,sans-serif;margin:0;padding:16px}
+  h1{font-size:20px;margin:0 0 4px}
+  .sub{color:#8b949e;font-size:13px;margin-bottom:12px}
+  .status{padding:10px;border-radius:8px;margin-bottom:12px;font-size:14px}
+  .ok{background:#12351f;color:#3fb950}
+  .bad{background:#3d1417;color:#f85149}
+  .wait{background:#2a2410;color:#d29922}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:6px 4px;border-bottom:1px solid #21262d}
+  th{color:#8b949e;font-weight:600}
+  button{background:#238636;color:#fff;border:0;border-radius:8px;padding:10px 16px;font-size:15px;margin-bottom:12px}
+</style>
+</head>
+<body>
+<h1>Connection Test</h1>
+<div class="sub">Data source: Bitnomial Exchange (CFTC-regulated). Nothing here is simulated.</div>
+<button onclick="run()">Test again</button>
+<div id="status" class="status wait">Starting...</div>
+<div id="out"></div>
+
+<script>
+var BASE = "https://bitnomial.com/exchange/api/v1/prod";
+
+function asList(x){
+  if (Array.isArray(x)) return x;
+  if (x && Array.isArray(x.data)) return x.data;
+  return [];
+}
+
+async function getJSON(path){
+  var r = await fetch(BASE + path);
+  if (!r.ok) throw new Error("HTTP " + r.status + " from " + path);
+  return r.json();
+}
+
+function setStatus(cls, text){
+  var s = document.getElementById("status");
+  s.className = "status " + cls;
+  s.textContent = text;
+}
+
+async function run(){
+  setStatus("wait", "Contacting Bitnomial...");
+  document.getElementById("out").innerHTML = "";
+  try{
+    var results = await Promise.all([
+      getJSON("/product/data/?active=true"),
+      getJSON("/product/specs/?active=true")
+    ]);
+    var data = asList(results[0]);
+    var specs = asList(results[1]);
+
+    var specById = {};
+    specs.forEach(function(s){ specById[s.product_id] = s; });
+
+    var rows = data.map(function(d){
+      var s = specById[d.product_id] || {};
+      var inc = s.price_increment || 1;
+      var price = (d.last_price !== null && d.last_price !== undefined) ? (d.last_price * inc) : null;
+      return {
+        symbol: s.symbol || ("id " + d.product_id),
+        price: price,
+        change: d.price_change,
+        oi: d.open_interest
+      };
+    });
+
+    var html = "<table><tr><th>Symbol</th><th>Last price (USD)</th><th>24h %</th><th>Open int. (daily)</th></tr>";
+    rows.slice(0, 25).forEach(function(r){
+      html += "<tr><td>" + r.symbol + "</td><td>" +
+        (r.price === null ? "n/a" : r.price.toLocaleString()) + "</td><td>" +
+        (r.change === null || r.change === undefined ? "n/a" : r.change.toFixed(2)) + "</td><td>" +
+        (r.oi === null || r.oi === undefined ? "n/a" : r.oi) + "</td></tr>";
+    });
+    html += "</table>";
+    document.getElementById("out").innerHTML = html;
+
+    setStatus("ok", "LIVE: " + data.length + " active products loaded from Bitnomial at " + new Date().toLocaleTimeString());
+  } catch(e){
+    setStatus("bad", "FAILED: " + e.message + " (data unavailable, nothing is being shown)");
+  }
+}
+run();
+</script>
+</body>
+</html>
