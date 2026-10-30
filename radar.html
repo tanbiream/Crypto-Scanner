@@ -29,7 +29,7 @@
 <div class="tabs" id="tabs"></div>
 <div id="status" class="bar wait">Loading...</div>
 <div class="wrap" id="out"></div>
-<div class="warn">Flags show unusual trading activity that has already started. They do not predict a pump, and most will fade. Thresholds (3x relative volume, 12% moves, $50K daily volume floor) are untested first guesses. Volume is compared with the same coin's own last hour. Low-volume coins can be manipulated: a pump can reverse in seconds. Kraken's daily counters reset at 00:00 UTC (8 PM ET). Leveraged trading can lose more than you put in. This is not financial advice.</div>
+<div class="warn">Flags show unusual trading activity that has already started. They do not predict a pump, and most will fade. Thresholds (3x relative volume, 12% moves, $10K minimum 5-minute volume, $50K daily volume floor) are untested first guesses. Volume is compared with the coin's own recent and typical activity. Low-volume coins can be manipulated: a pump can reverse in seconds. Kraken's daily counters reset at 00:00 UTC (8 PM ET). Leveraged trading can lose more than you put in. This is not financial advice.</div>
 <script>
 var BASE = "https://scanner-relay.tanbir-eam-6ff.workers.dev";
 var view = "flagged", cache = null;
@@ -51,6 +51,7 @@ function price(v){
 }
 function money(v){ if (v >= 1e6) return "$" + (v/1e6).toFixed(1) + "M"; if (v >= 1e3) return "$" + Math.round(v/1e3) + "K"; return "$" + Math.round(v); }
 function pct(v){ return v === null ? "<span class='mut'>n/a</span>" : "<span class='" + (v >= 0 ? "up" : "dn") + "'>" + (v >= 0 ? "+" : "") + v.toFixed(2) + "%</span>"; }
+function relText(v){ return v === null ? "<span class='mut'>n/a</span>" : (v > 50 ? "50x+" : v.toFixed(1) + "x"); }
 function pxAt(o, target){
   for (var i = o.ts.length - 1; i >= 0; i--){
     if (o.ts[i] <= target) return (target - o.ts[i] <= 180) ? o.px[i] : null;
@@ -113,7 +114,10 @@ function analyze(hist){
         if (lo === null || o.px[i] < lo) lo = o.px[i];
       }
     }
-    var recR = recM > 0 ? recU / recM : null, baseR = baseM > 0 ? baseU / baseM : null;
+    var typical = usd24 / 1440;
+    var recR = recM > 0 ? recU / recM : null;
+    var baseR = baseM > 0 ? baseU / baseM : null;
+    if (baseR !== null) baseR = Math.max(baseR, typical);
     var rel = (recR !== null && baseR !== null && baseR > 0) ? recR / baseR : null;
     var ready = spanOk && baseM >= 30 && recM >= 3;
 
@@ -123,20 +127,21 @@ function analyze(hist){
     var c60 = p60 ? (px / p60 - 1) * 100 : null;
     var fromOpen = o.open > 0 ? (px / o.open - 1) * 100 : null;
 
-    var label = "", warn = "";
-    if (ready && rel !== null && recU >= 2000 && c5 !== null && c15 !== null){
-      if (rel >= 3 && Math.abs(c15) > 12) label = c15 > 0 ? "Extended up" : "Extended down";
-      else if (hi !== null && px > hi && rel >= 2) label = "Breakout";
-      else if (lo !== null && px < lo && rel >= 2) label = "Breakdown";
-      else if (rel >= 3 && c15 >= 1 && c5 > 0) label = "Potential pump";
-      else if (rel >= 3 && c15 <= -1 && c5 < 0) label = "Potential dump";
-      else if (rel >= 2 && Math.abs(c15) < 1) label = "Volume up, price flat";
+    var label = "", why = "", warn = "";
+    if (ready && rel !== null && recU >= 10000 && c5 !== null && c15 !== null){
+      var rt = rel.toFixed(1) + "x normal volume";
+      if (rel >= 3 && Math.abs(c15) > 12){ label = c15 > 0 ? "Extended up" : "Extended down"; why = c15.toFixed(1) + "% in 15m on " + rt; }
+      else if (hi !== null && px > hi * 1.005 && rel >= 3){ label = "Breakout"; why = ((px / hi - 1) * 100).toFixed(1) + "% above 1h high, " + rt; }
+      else if (lo !== null && px < lo * 0.995 && rel >= 3){ label = "Breakdown"; why = ((1 - px / lo) * 100).toFixed(1) + "% below 1h low, " + rt; }
+      else if (rel >= 3 && c15 >= 1 && c5 > 0){ label = "Potential pump"; why = rt + ", up " + c15.toFixed(1) + "% in 15m"; }
+      else if (rel >= 3 && c15 <= -1 && c5 < 0){ label = "Potential dump"; why = rt + ", down " + Math.abs(c15).toFixed(1) + "% in 15m"; }
+      else if (rel >= 3 && Math.abs(c15) < 1 && recU >= 50000){ label = "Volume up, price flat"; why = rt + ", price barely moved"; }
     }
     if (c60 !== null && Math.abs(c60) >= 12) warn = "Moved " + c60.toFixed(0) + "% in 1h: do not chase";
     else if (fromOpen !== null && fromOpen >= 30) warn = "Up " + fromOpen.toFixed(0) + "% today: do not chase";
 
     out.push({ k: k, name: nameOf(k), px: px, c5: c5, c15: c15, c60: c60, fromOpen: fromOpen,
-               rel: rel, recU: recU, usd24: usd24, label: label, warn: warn, ready: ready });
+               rel: rel, recU: recU, usd24: usd24, label: label, why: why, warn: warn, ready: ready });
   });
   return { rows: out, lastTs: lastTs, spanMin: Math.round((lastTs - firstTs) / 60) };
 }
@@ -149,7 +154,7 @@ function render(hist){
   var rows = a.rows;
   if (stale){
     setStatus("bad", "STALE: newest data is " + age + " seconds old. Flags are turned off.");
-    rows.forEach(function(r){ r.label = ""; r.warn = ""; });
+    rows.forEach(function(r){ r.label = ""; r.why = ""; r.warn = ""; });
   }
   var anyReady = rows.some(function(r){ return r.ready; });
   var flagged = rows.filter(function(r){ return r.label !== ""; }).length;
@@ -164,15 +169,15 @@ function render(hist){
   });
   var show = view === "flagged" ? rows.filter(function(r){ return r.label !== "" || r.warn !== ""; }) : rows.slice(0, 80);
 
-  var h = "<table><tr><th>Coin</th><th>Price (USD)</th><th>5m</th><th>15m</th><th>1h</th><th>Today</th><th>Rel. volume</th><th>Vol last 5m</th><th>24h volume</th><th>Signal</th><th>Warning</th></tr>";
+  var h = "<table><tr><th>Coin</th><th>Price (USD)</th><th>5m</th><th>15m</th><th>1h</th><th>Today</th><th>Rel. volume</th><th>Vol last 5m</th><th>24h volume</th><th>Signal</th><th>Why</th><th>Warning</th></tr>";
   show.forEach(function(r){
     var lc = (r.label === "Potential pump" || r.label === "Breakout") ? "up" : (r.label === "Potential dump" || r.label === "Breakdown") ? "dn" : (r.label ? "warnc" : "mut");
     h += "<tr><td><a href='https://www.tradingview.com/chart/?symbol=KRAKEN%3A" + tvName(r.name) + "USD' target='_blank'>" + r.name + "</a></td><td>" + price(r.px) + "</td><td>" +
       pct(r.c5) + "</td><td>" + pct(r.c15) + "</td><td>" + pct(r.c60) + "</td><td>" + pct(r.fromOpen) + "</td><td>" +
-      (r.rel === null ? "<span class='mut'>n/a</span>" : r.rel.toFixed(1) + "x") + "</td><td>" + money(r.recU) + "</td><td>" + money(r.usd24) + "</td><td class='" + lc + "'>" +
-      (r.label || "none") + "</td><td class='warnc'>" + r.warn + "</td></tr>";
+      relText(r.rel) + "</td><td>" + money(r.recU) + "</td><td>" + money(r.usd24) + "</td><td class='" + lc + "'>" +
+      (r.label || "none") + "</td><td class='mut'>" + r.why + "</td><td class='warnc'>" + r.warn + "</td></tr>";
   });
-  if (!show.length) h += "<tr><td colspan='11' class='mut'>Nothing flagged right now. That is normal in a quiet market.</td></tr>";
+  if (!show.length) h += "<tr><td colspan='12' class='mut'>Nothing flagged right now. That is normal in a quiet market.</td></tr>";
   h += "</table>";
   document.getElementById("out").innerHTML = h;
 }
