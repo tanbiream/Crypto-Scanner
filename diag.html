@@ -3,22 +3,26 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Diagnostic</title>
+<title>Diagnostic - Perpetuals</title>
 <style>
   body{background:#0d1117;color:#e6edf3;font-family:-apple-system,Helvetica,Arial,sans-serif;margin:0;padding:12px;font-size:12px}
   h2{font-size:15px;margin:14px 0 4px;color:#58a6ff}
   pre{background:#161b22;padding:8px;border-radius:6px;white-space:pre-wrap;word-break:break-word;margin:0}
+  .wrap{overflow-x:auto}
+  table{border-collapse:collapse;min-width:100%}
+  th,td{text-align:left;padding:5px 8px;border-bottom:1px solid #21262d;white-space:nowrap}
+  th{color:#8b949e}
 </style>
 </head>
 <body>
-<h1 style="font-size:18px">Diagnostic (raw Bitnomial data)</h1>
+<h1 style="font-size:18px">Perpetuals (raw Bitnomial data)</h1>
 <div id="out">Loading...</div>
 <script>
 var BASE = "https://scanner-relay.tanbir-eam-6ff.workers.dev";
 function asList(x){ if(Array.isArray(x)) return x; if(x && Array.isArray(x.data)) return x.data; return []; }
-function sec(title, obj){
-  return "<h2>" + title + "</h2><pre>" +
-    (typeof obj === "string" ? obj : JSON.stringify(obj, null, 1)) + "</pre>";
+function n(v, inc){
+  if (v === null || v === undefined) return "null";
+  return (v * (inc || 1)).toLocaleString(undefined, {maximumFractionDigits: 6});
 }
 async function go(){
   var out = document.getElementById("out");
@@ -28,25 +32,26 @@ async function go(){
       fetch(BASE + "/product/specs/?active=true").then(function(r){return r.json();})
     ]);
     var data = asList(rs[0]), specs = asList(rs[1]);
-    var html = "";
-    html += sec("Counts", "products: " + data.length + ", specs: " + specs.length);
-    var methods = {}, types = {};
-    specs.forEach(function(s){
-      methods[s.settlement_method] = (methods[s.settlement_method]||0)+1;
-      types[s.type] = (types[s.type]||0)+1;
+    var dataById = {};
+    data.forEach(function(d){ dataById[d.product_id] = d; });
+    var perps = specs.filter(function(s){ return s.type === "perpetual"; });
+
+    var html = "<h2>Perpetual count: " + perps.length + "</h2>";
+    html += "<h2>First perpetual: spec</h2><pre>" + JSON.stringify(perps[0], null, 1) + "</pre>";
+    html += "<h2>First perpetual: data</h2><pre>" + JSON.stringify(dataById[perps[0].product_id], null, 1) + "</pre>";
+
+    html += "<h2>All perpetuals (price = raw x price_increment)</h2><div class='wrap'><table>";
+    html += "<tr><th>Symbol</th><th>Name</th><th>Last</th><th>Mark</th><th>Funding</th><th>Vol</th><th>OI</th><th>OI chg</th><th>24h%</th></tr>";
+    perps.forEach(function(s){
+      var d = dataById[s.product_id] || {};
+      var inc = s.price_increment;
+      html += "<tr><td>" + s.symbol + "</td><td>" + s.product_name + "</td><td>" +
+        n(d.last_price, inc) + "</td><td>" + n(d.mark_price, inc) + "</td><td>" +
+        (d.funding_rate === null || d.funding_rate === undefined ? "null" : d.funding_rate) + "</td><td>" +
+        d.volume + "</td><td>" + d.open_interest + "</td><td>" + d.open_interest_change + "</td><td>" +
+        (d.price_change === null || d.price_change === undefined ? "null" : d.price_change) + "</td></tr>";
     });
-    html += sec("Settlement methods", methods);
-    html += sec("Types", types);
-    var btc = specs.filter(function(s){ return s.symbol === "BTCUSD"; })[0];
-    html += sec("BTCUSD spec", btc || "not found");
-    if (btc){
-      var d = data.filter(function(x){ return x.product_id === btc.product_id; })[0];
-      html += sec("BTCUSD data", d || "not found");
-    }
-    var perps = specs.filter(function(s){
-      return !/[FGHJKMNQUVXZ]\d\d$/.test(s.symbol);
-    }).map(function(s){ return s.symbol + " | " + s.product_name; });
-    html += sec("Symbols without a month-year ending (" + perps.length + ")", perps.join("\n"));
+    html += "</table></div>";
     out.innerHTML = html;
   } catch(e){
     out.textContent = "FAILED: " + e.message;
