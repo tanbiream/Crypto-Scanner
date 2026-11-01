@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Radar Review</title>
+<style>
+  body{background:#0d1117;color:#e6edf3;font-family:-apple-system,Helvetica,Arial,sans-serif;margin:0;padding:12px;font-size:13px}
+  h1{font-size:18px;margin:0 0 2px}
+  h2{font-size:15px;margin:18px 0 4px;color:#58a6ff}
+  .sub{color:#8b949e;font-size:12px;margin-bottom:10px}
+  .bar{padding:9px;border-radius:8px;margin:10px 0}
+  .ok{background:#12351f;color:#3fb950}
+  .bad{background:#3d1417;color:#f85149}
+  .wait{background:#2a2410;color:#d29922}
+  .ctl label{margin-right:12px;color:#8b949e}
+  select,input{background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:8px;font-size:14px}
+  button{background:#21262d;color:#e6edf3;border:0;border-radius:8px;padding:8px 14px;font-size:14px;margin-right:6px}
+  button.on,button.run{background:#238636}
+  .wrap{overflow-x:auto;margin-top:8px}
+  table{border-collapse:collapse;min-width:100%}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid #21262d;white-space:nowrap}
+  th{color:#8b949e;font-weight:600}
+  .up{color:#3fb950}.dn{color:#f85149}.mut{color:#8b949e}.warnc{color:#d29922}
+  .warn{color:#8b949e;font-size:11px;margin-top:14px;line-height:1.6}
+  pre{background:#161b22;padding:8px;border-radius:6px;white-space:pre-wrap;margin:6px 0}
+</style>
+</head>
+<body>
+<h1>Radar Review</h1>
+<div class="sub">Replays recorded Kraken spot snapshots, finds every flag the radar would have raised (using only data available at that moment), then measures what price did afterward. Analysis only.</div>
+<div class="ctl">
+  <label>History <select id="hours"><option value="6">6 hours</option><option value="12">12 hours</option><option value="24" selected>24 hours</option><option value="48">48 hours</option></select></label>
+  <label>Round-trip cost % <input id="cost" type="number" step="0.1" value="1.0" style="width:70px" onchange="render()"></label>
+  <button class="run" onclick="run()">Run review</button>
+</div>
+<div class="bar wait" id="status">Press "Run review".</div>
+<div class="tabs" id="tabs"></div>
+<pre id="summary"></pre>
+<h2>Results by signal type</h2>
+<div class="wrap" id="stats"></div>
+<h2>Individual flags (newest first, up to 150)</h2>
+<div class="wrap" id="events"></div>
+<div class="warn">How to read this: entry is the recorded price one minute after the flag; exit is the recorded price after the chosen holding time. "Direction" means: breakout, potential pump and extended up are treated as long ideas, breakdown, potential dump and extended down as short ideas (shorting spot is not assumed to be available, so short results are hypothetical). "Baseline" is the average move of all liquid coins at sampled times in the same period, in the same direction, so you can see whether a flag did better than random coins in the same market. The cost is an assumption you can change, not a measured fee, and thin coins can cost more. A coin can raise at most one flag per hour. Samples from a few days, or a weekend, say little about other markets. A positive result here is not proof of a profitable strategy, and nothing here is financial advice.</div>
+<script>
+var BASE = "https://scanner-relay.tanbir-eam-6ff.workers.dev";
+var HZS = [900, 3600, 10800], HN = ["15 min", "1 hour", "3 hours"];
+var hIdx = 1, res = null;
+var LABELS = ["Breakout","Potential pump","Extended up","Breakdown","Potential dump","Extended down","Volume up, price flat"];
+var DIR = {"Breakout":1,"Potential pump":1,"Extended up":1,"Breakdown":-1,"Potential dump":-1,"Extended down":-1,"Volume up, price flat":0};
+
+function nameOf(k){
+  var legacy = /ZUSD$/.test(k);
+  var n = k.replace(/ZUSD$/, "").replace(/USD$/, "");
+  if (legacy && n.length === 4 && n.charAt(0) === "X") n = n.slice(1);
+  if (n === "XBT") n = "BTC";
+  if (n === "XDG") n = "DOGE";
+  return n;
+}
+function setStatus(cls, t){ var s = document.getElementById("status"); s.className = "bar " + cls; s.textContent = t; }
+function ub(arr, x){ var lo = 0, hi = arr.length; while (lo < hi){ var m = (lo + hi) >> 1; if (arr[m] > x) hi = m; else lo = m + 1; } return lo; }
+function pxAt(o, target){
+  var i = ub(o.ts, target) - 1;
+  if (i < 0) return null;
+  return (target - o.ts[i] <= 180) ? o.px[i] : null;
+}
+function fwd(o, entryT, lastTs){
+  var out = [null, null, null];
+  if (entryT > lastTs) return { e: null, r: out };
+  var e = pxAt(o, entryT);
+  if (!e) return { e: null, r: out };
+  for (var k = 0; k < 3; k++){
+    var tt = entryT + HZS[k];
+    if (tt <= lastTs){ var x = pxAt(o, tt); if (x) out[k] = (x / e - 1) * 100; }
+  }
+  return { e: e, r: out };
+}
+function pct(v, d){ if (v === null || v === undefined || isNaN(v)) return "<span class='mut'>n/a</span>"; return "<span class='" + (v >= 0 ? "up" : "dn") + "'>" + (v >= 0 ? "+" : "") + v.toFixed(d === undefined ? 2 : d) + "%</span>"; }
+function price(v){ if (v >= 100) return v.toLocaleString(undefined, {maximumFractionDigits: 2}); if (v >= 1) return v.toFixed(3); if (v >= 0.01) return v.toFixed(5); return v.toPrecision(3); }
+function fmtTime(t){ return new Date(t * 1000).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"}); }
+
+function drawTabs(){
+  var h = "<span class='mut'>Holding time: </span>";
+  for (var k = 0; k < 3; k++) h += "<button class='" + (k === hIdx ? "on" : "") + "' onclick='pickH(" + k + ")'>" + HN[k] + "</button>";
+  document.getElementById("tabs").innerHTML = h;
+}
+function pickH(k){ hIdx = k; drawTabs(); render(); }
+
+async function run(){
+  var hours = parseInt(document.getElementById("hours").value, 10);
+  var nowSec = Math.floor(Date.now() / 1000);
+  var from = nowSec - hours * 3600, chunk = 7200;
+  var total = Math.ceil((nowSec - from) / chunk);
+  var by = {}, snaps = 0, firstTs = null, lastTs = null;
+  res = null;
+  try{
+    for (var c = 0; c < total; c++){
+      setStatus("wait", "Loading data: part " + (c + 1) + " of " + total + "...");
+      var a = from + c * chunk, b = Math.min(nowSec, a + chunk - 1);
+      var r = await fetch(BASE + "/radar/range?from=" + a + "&to=" + b);
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      var arr = await r.json();
+      if (!Array.isArray(arr)) throw new Error("Unexpected reply. Did the Worker update (Part A) get deployed?");
+      arr.forEach(function(sn){
+        var ts = sn[0];
+        if (firstTs === null) firstTs = ts;
+        lastTs = ts; snaps++;
+        sn[1].forEach(function(row){
+          if (row[0].indexOf(".") >= 0) return;
+          var o = by[row[0]] || (by[row[0]] = { ts: [], px: [], vol: [], v24: [], open: [] });
+          o.ts.push(ts); o.px.push(row[1]); o.vol.push(row[2]); o.v24.push(row[3]); o.open.push(row[5]);
+        });
+      });
+    }
+    if (snaps < 60) throw new Error("Only " + snaps + " snapshots found. Need at least 60 minutes of data.");
+    res = await analyzeAll(by, firstTs, lastTs);
+    res.snaps = snaps; res.firstTs = firstTs; res.lastTs = lastTs; res.coins = Object.keys(by).length;
+    var spanH = (lastTs - firstTs) / 3600;
+    var warn = (spanH < 20 || res.events.length < 30) ? " Early data: treat results as a test of the page, not evidence." : "";
+    setStatus(warn ? "wait" : "ok", "Done: " + res.events.length + " flags found over " + spanH.toFixed(1) + " hours." + warn);
+    drawTabs(); render();
+  } catch(e){
+    setStatus("bad", "FAILED: " + e.message);
+  }
+}
+
+async function analyzeAll(by, firstTs, lastTs){
+  var keys = Object.keys(by), events = [], bsum = [0,0,0], bcnt = [0,0,0], evalCount = 0;
+  for (var ki = 0; ki < keys.length; ki++){
+    var o = by[keys[ki]], n = o.ts.length;
+    if (n >= 40){
+      var P = new Float64Array(n + 1), M = new Float64Array(n + 1), vmax, i;
+      for (i = 1; i < n; i++){
+        var cur = o.vol[i];
+        if (Math.floor(o.ts[i] / 86400) !== Math.floor(o.ts[i-1] / 86400)) vmax = cur;
+        var baseV = (vmax === undefined) ? o.vol[i-1] : vmax;
+        var d = Math.max(0, cur - baseV);
+        if (vmax === undefined || cur > vmax) vmax = cur;
+        P[i+1] = P[i] + d * o.px[i];
+        M[i+1] = M[i] + (o.ts[i] - o.ts[i-1]) / 60;
+      }
+      P[1] = 0; M[1] = 0;
+      var lastEv = -1e12, name = nameOf(keys[ki]);
+      for (i = 1; i < n; i++){
+        var t = o.ts[i];
+        if (t - firstTs < 2700) continue;
+        var px = o.px[i], usd24 = o.v24[i] * px;
+        if (!(usd24 >= 50000)) continue;
+        var a = ub(o.ts, t - 300), b0 = ub(o.ts, t - 3900);
+        var recU = P[i+1] - P[a], recM = M[i+1] - M[a], baseU = P[a] - P[b0], baseM = M[a] - M[b0];
+        if (!(baseM >= 30 && recM >= 3)) continue;
+        evalCount++;
+        if (t % 600 === 0){
+          var fb = fwd(o, t + 60, lastTs);
+          for (var k = 0; k < 3; k++) if (fb.r[k] !== null){ bsum[k] += fb.r[k]; bcnt[k]++; }
+        }
+        if (t - lastEv < 3600) continue;
+        var hi = null, lo = null;
+        for (var j = b0; j < a; j++){ var pj = o.px[j]; if (hi === null || pj > hi) hi = pj; if (lo === null || pj < lo) lo = pj; }
+        var typical = usd24 / 1440;
+        var recR = recM > 0 ? recU / recM : null;
+        var baseR = baseM > 0 ? baseU / baseM : null;
+        if (baseR !== null) baseR = Math.max(baseR, typical);
+        var rel = (recR !== null && baseR !== null && baseR > 0) ? recR / baseR : null;
+        var p5 = pxAt(o, t - 300), p15 = pxAt(o, t - 900), p60 = pxAt(o, t - 3600);
+        var c5 = p5 ? (px / p5 - 1) * 100 : null;
+        var c15 = p15 ? (px / p15 - 1) * 100 : null;
+        var c60 = p60 ? (px / p60 - 1) * 100 : null;
+        var fromOpen = o.open[i] > 0 ? (px / o.open[i] - 1) * 100 : null;
+        var label = "", why = "", warn = "";
+        if (rel !== null && recU >= 10000 && c5 !== null && c15 !== null){
+          var rt = rel.toFixed(1) + "x normal volume";
+          if (rel >= 3 && Math.abs(c15) > 12){ label = c15 > 0 ? "Extended up" : "Extended down"; why = c15.toFixed(1) + "% in 15m on " + rt; }
+          else if (hi !== null && px > hi * 1.005 && rel >= 3){ label = "Breakout"; why = ((px / hi - 1) * 100).toFixed(1) + "% above 1h high, " + rt; }
+          else if (lo !== null && px < lo * 0.995 && rel >= 3){ label = "Breakdown"; why = ((1 - px / lo) * 100).toFixed(1) + "% below 1h low, " + rt; }
+          else if (rel >= 3 && c15 >= 1 && c5 > 0){ label = "Potential pump"; why = rt + ", up " + c15.toFixed(1) + "% in 15m"; }
+          else if (rel >= 3 && c15 <= -1 && c5 < 0){ label = "Potential dump"; why = rt + ", down " + Math.abs(c15).toFixed(1) + "% in 15m"; }
+          else if (rel >= 3 && Math.abs(c15) < 1 && recU >= 50000){ label = "Volume up, price flat"; why = rt + ", price barely moved"; }
+        }
+        if (!label) continue;
+        if (c60 !== null && Math.abs(c60) >= 12) warn = "moved " + c60.toFixed(0) + "% in 1h";
+        else if (fromOpen !== null && fromOpen >= 30) warn = "up " + fromOpen.toFixed(0) + "% today";
+        var f = fwd(o, t + 60, lastTs);
+        events.push({ t: t, name: name, label: label, why: why, warn: warn, e: f.e, r: f.r });
+        lastEv = t;
+      }
+    }
+    if (ki % 15 === 0){
+      setStatus("wait", "Analyzing: coin " + (ki + 1) + " of " + keys.length + "...");
+      await new Promise(function(rs){ setTimeout(rs, 0); });
+    }
+  }
+  events.sort(function(x, y){ return y.t - x.t; });
+  return { events: events, bsum: bsum, bcnt: bcnt, evalCount: evalCount };
+}
+
+function render(){
+  if (!res) return;
+  var k = hIdx, cost = parseFloat(document.getElementById("cost").value);
+  if (isNaN(cost)) cost = 1;
+  var bAvg = res.bcnt[k] ? res.bsum[k] / res.bcnt[k] : null;
+  document.getElementById("summary").textContent =
+    "Data: " + res.snaps + " snapshots, " + fmtTime(res.firstTs) + " to " + fmtTime(res.lastTs) + ", " + res.coins + " coins seen.\n" +
+    "Coin-minutes checked: " + res.evalCount + ". Flags found: " + res.events.length + ".\n" +
+    "Baseline (" + HN[k] + "): " + (bAvg === null ? "n/a" : (bAvg >= 0 ? "+" : "") + bAvg.toFixed(3) + "% average move of all liquid coins, from " + res.bcnt[k] + " samples.") + "\n" +
+    "Assumed round-trip cost: " + cost.toFixed(2) + "%.";
+
+  var h = "<table><tr><th>Signal</th><th>Direction</th><th>Flags</th><th>Completed (" + HN[k] + ")</th><th>Avg move</th><th>Median</th><th>Avg after cost</th><th>Win % after cost</th><th>Baseline</th><th>Better than baseline by</th><th>Verdict</th></tr>";
+  LABELS.forEach(function(lb){
+    var dir = DIR[lb];
+    var evs = res.events.filter(function(e){ return e.label === lb; });
+    var done = evs.filter(function(e){ return e.r[k] !== null; });
+    var n = done.length;
+    var dirTxt = dir === 1 ? "long idea" : dir === -1 ? "short idea" : "none";
+    if (!n){
+      h += "<tr><td>" + lb + "</td><td>" + dirTxt + "</td><td>" + evs.length + "</td><td>0</td><td colspan='7' class='mut'>no completed flags yet</td></tr>";
+      return;
+    }
+    var vals = done.map(function(e){ return dir === 0 ? Math.abs(e.r[k]) : dir * e.r[k]; });
+    var avg = vals.reduce(function(s, v){ return s + v; }, 0) / n;
+    var sorted = vals.slice().sort(function(x, y){ return x - y; });
+    var med = n % 2 ? sorted[(n - 1) / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
+    var verdict = "";
+    if (dir === 0){
+      h += "<tr><td>" + lb + "</td><td>" + dirTxt + "</td><td>" + evs.length + "</td><td>" + n + "</td><td>" + avg.toFixed(2) + "% (avg size of move)</td><td>" + med.toFixed(2) + "%</td><td class='mut'>n/a</td><td class='mut'>n/a</td><td class='mut'>n/a</td><td class='mut'>n/a</td><td class='mut'>no direction</td></tr>";
+      return;
+    }
+    var wins = vals.filter(function(v){ return v - cost > 0; }).length;
+    var base = bAvg === null ? null : dir * bAvg;
+    var added = base === null ? null : avg - base;
+    if (n < 30) verdict = "<span class='warnc'>too few (n=" + n + ", need 30+)</span>";
+    else if (avg - cost > 0 && added !== null && added > 0) verdict = "<span class='up'>positive in this sample (not proof)</span>";
+    else verdict = "<span class='dn'>no edge shown</span>";
+    h += "<tr><td>" + lb + "</td><td>" + dirTxt + "</td><td>" + evs.length + "</td><td>" + n + "</td><td>" + pct(avg) + "</td><td>" + pct(med) + "</td><td>" + pct(avg - cost) + "</td><td>" + (100 * wins / n).toFixed(0) + "%</td><td>" + pct(base) + "</td><td>" + pct(added) + "</td><td>" + verdict + "</td></tr>";
+  });
+  h += "</table>";
+  document.getElementById("stats").innerHTML = h;
+
+  var e2 = "<table><tr><th>Time</th><th>Coin</th><th>Signal</th><th>Why</th><th>Entry</th><th>15 min</th><th>1 hour</th><th>3 hours</th><th>Note</th></tr>";
+  res.events.slice(0, 150).forEach(function(e){
+    var dir = DIR[e.label];
+    function cell(v){ return v === null ? "<span class='mut'>pending</span>" : pct(dir === -1 ? -v : v); }
+    e2 += "<tr><td>" + fmtTime(e.t) + "</td><td>" + e.name + "</td><td>" + e.label + "</td><td class='mut'>" + e.why + "</td><td>" + (e.e === null ? "n/a" : price(e.e)) + "</td><td>" + cell(e.r[0]) + "</td><td>" + cell(e.r[1]) + "</td><td>" + cell(e.r[2]) + "</td><td class='warnc'>" + (e.warn ? "already " + e.warn : "") + "</td></tr>";
+  });
+  if (!res.events.length) e2 += "<tr><td colspan='9' class='mut'>No flags in this period.</td></tr>";
+  e2 += "</table><div class='sub'>Returns are shown in the direction of the idea (a short idea that fell shows green). Volume-only flags show raw moves.</div>";
+  document.getElementById("events").innerHTML = e2;
+}
+drawTabs();
+</script>
+</body>
+</html>
