@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recorder Health</title>
+<style>
+  body{background:#0d1117;color:#e6edf3;font-family:-apple-system,Helvetica,Arial,sans-serif;margin:0;padding:14px;font-size:14px}
+  h1{font-size:19px;margin:0 0 2px}
+  .sub{color:#8b949e;font-size:12px;margin-bottom:14px}
+  .card{border-radius:10px;padding:14px;margin-bottom:12px;border:1px solid #30363d;background:#161b22}
+  .card.ok{border-color:#238636}
+  .card.warn{border-color:#9e6a03}
+  .card.bad{border-color:#da3633}
+  .title{font-size:16px;font-weight:600;margin-bottom:4px}
+  .light{display:inline-block;width:12px;height:12px;border-radius:50%;margin-right:8px;vertical-align:middle}
+  .ok .light{background:#3fb950}.warn .light{background:#d29922}.bad .light{background:#f85149}
+  .big{font-size:15px;margin:6px 0}
+  .mut{color:#8b949e;font-size:12px;line-height:1.6}
+  .links a{color:#58a6ff;text-decoration:none;display:block;padding:5px 0}
+  button{background:#238636;color:#fff;border:0;border-radius:8px;padding:9px 16px;font-size:14px}
+</style>
+</head>
+<body>
+<h1>Recorder Health</h1>
+<div class="sub">Checks that both background recorders are saving a snapshot every minute. Refreshes every 30 seconds while open. <span id="now"></span></div>
+<div id="cards">Loading...</div>
+<button onclick="check()">Check now</button>
+<h2 style="font-size:15px;margin:20px 0 4px;color:#58a6ff">Your pages</h2>
+<div class="links">
+  <a href="index.html">Futures scanner (index)</a>
+  <a href="scores.html">Long / Short scoreboard</a>
+  <a href="radar.html">Pump radar</a>
+  <a href="review.html">Radar review</a>
+  <a href="scorereview.html">Score review</a>
+</div>
+<div class="mut" style="margin-top:14px">Green: newest snapshot under 2 minutes old. Yellow: 2 to 5 minutes. Red: over 5 minutes, or the check failed. If a light stays red for more than 10 minutes, take a screenshot and send it to Claude. "Missing minutes" counts minutes with no snapshot since recording began: a small number is normal, a number that keeps growing is not.</div>
+<script>
+var BASE = "https://scanner-relay.tanbir-eam-6ff.workers.dev";
+var TARGETS = [
+  ["Futures recorder (Bitnomial perpetuals)", "/recorder/status"],
+  ["Radar recorder (Kraken spot, all USD coins)", "/radar/status"]
+];
+function fmtUTC(s){ return s ? new Date(s).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"}) : "n/a"; }
+function ageTxt(s){ if (s < 120) return s + " seconds"; if (s < 7200) return Math.round(s / 60) + " minutes"; return (s / 3600).toFixed(1) + " hours"; }
+
+async function one(t){
+  try{
+    var r = await fetch(BASE + t[1] + "?_=" + Date.now());
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    var j = await r.json();
+    if (j.ok === false) throw new Error(j.error || "error");
+    var secs = j.seconds_since_last, n = j.snapshots_stored;
+    var cls = secs === null ? "bad" : secs < 120 ? "ok" : secs <= 300 ? "warn" : "bad";
+    var first = Date.parse(j.first_utc), last = Date.parse(j.last_utc);
+    var expected = Math.round((last - first) / 60000) + 1, missing = Math.max(0, expected - n);
+    var cover = expected > 0 ? (100 * n / expected).toFixed(1) : "n/a";
+    var verdict = cls === "ok" ? "Running normally" : cls === "warn" ? "Slightly behind: check again in a few minutes" : "Not updating: needs attention";
+    return "<div class='card " + cls + "'><div class='title'><span class='light'></span>" + t[0] + "</div>" +
+      "<div class='big'>" + verdict + "</div>" +
+      "<div class='mut'>Newest snapshot: " + ageTxt(secs) + " ago (" + fmtUTC(j.last_utc) + ")<br>" +
+      "Snapshots stored: " + n + " since " + fmtUTC(j.first_utc) + "<br>" +
+      "Missing minutes since recording began: " + missing + " (" + cover + "% covered)</div></div>";
+  } catch(e){
+    return "<div class='card bad'><div class='title'><span class='light'></span>" + t[0] + "</div><div class='big'>Check failed</div><div class='mut'>" + e.message + "</div></div>";
+  }
+}
+async function check(){
+  var parts = await Promise.all(TARGETS.map(one));
+  document.getElementById("cards").innerHTML = parts.join("");
+  document.getElementById("now").textContent = "Checked at " + new Date().toLocaleTimeString() + ".";
+}
+check();
+setInterval(check, 30000);
+</script>
+</body>
+</html>
