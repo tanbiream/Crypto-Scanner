@@ -3,7 +3,7 @@
    Changing any number here starts a NEW test period: commit it and use the new commit time as the rules start. */
 var Rules = (function () {
   var CFG = {
-    version: "v1",
+    version: "v1.1",
     minUsd24: 50000,
     pullbackMinUsd24: 500000,
     minRec5Usd: 10000,
