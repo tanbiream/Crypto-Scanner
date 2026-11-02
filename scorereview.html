@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Score Review</title>
+<style>
+  body{background:#0d1117;color:#e6edf3;font-family:-apple-system,Helvetica,Arial,sans-serif;margin:0;padding:12px;font-size:13px}
+  h1{font-size:18px;margin:0 0 2px}
+  h2{font-size:15px;margin:18px 0 4px;color:#58a6ff}
+  .sub{color:#8b949e;font-size:12px;margin-bottom:10px}
+  .bar{padding:9px;border-radius:8px;margin:10px 0}
+  .ok{background:#12351f;color:#3fb950}
+  .bad{background:#3d1417;color:#f85149}
+  .wait{background:#2a2410;color:#d29922}
+  .ctl label{margin-right:12px;color:#8b949e;display:inline-block;margin-bottom:6px}
+  select,input{background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:8px;font-size:14px}
+  button{background:#21262d;color:#e6edf3;border:0;border-radius:8px;padding:8px 14px;font-size:14px;margin-right:6px}
+  button.on,button.run{background:#238636}
+  .wrap{overflow-x:auto;margin-top:8px}
+  table{border-collapse:collapse;min-width:100%}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid #21262d;white-space:nowrap}
+  th{color:#8b949e;font-weight:600}
+  .up{color:#3fb950}.dn{color:#f85149}.mut{color:#8b949e}.warnc{color:#d29922}
+  .warn{color:#8b949e;font-size:11px;margin-top:14px;line-height:1.6}
+  pre{background:#161b22;padding:8px;border-radius:6px;white-space:pre-wrap;margin:6px 0}
+  .rule{background:#161b22;border-left:3px solid #58a6ff;padding:8px 10px;margin:10px 0;line-height:1.6}
+</style>
+</head>
+<body>
+<h1>Score Review (replay of LONG / SHORT leans)</h1>
+<div class="sub">Replays recorded Bitnomial perpetual snapshots with the frozen score rules (<span id="ver"></span>). At each 5-minute step it scores every coin using only data from the previous 24 hours, exactly as the live scoreboard does, finds LONG and SHORT leans, and measures what price did afterward. Analysis only.</div>
+<div class="rule"><b>Pass/fail rules, written before any results:</b> the primary test is the 1-hour holding time. A lean type "meets the bar" only if ALL of these hold: (1) at least 50 completed events spread over at least 20 different hours; (2) the average result after cost is above zero; (3) it beats the baseline of random scored coins in the same direction; (4) the average after cost is above zero in BOTH the first and second half of the test period. The cost to use for the official read is 0.5% round trip. Other holding times are exploratory only. Meeting the bar would still not be proof of a profitable strategy.</div>
+<div class="ctl">
+  <label>Scores start (only judge leans after this) <input id="start" type="datetime-local" value="2026-11-02T13:45"></label>
+  <label>Round-trip cost % <input id="cost" type="number" step="0.1" value="0.5" style="width:70px" onchange="render()"></label>
+  <button class="run" onclick="run()">Run score review</button>
+</div>
+<div class="bar wait" id="status">Press "Run score review".</div>
+<div class="tabs" id="tabs"></div>
+<pre id="summary"></pre>
+<h2>Results by lean type</h2>
+<div class="wrap" id="stats"></div>
+<h2>Individual leans (newest first, up to 100)</h2>
+<div class="wrap" id="events"></div>
+<div class="warn">How to read this: entry is the recorded last-traded price one minute after the lean; exit is the recorded price after the holding time. The cost is an assumption, not a measured fee, and thin contracts can cost more. Short ideas are hypothetical. A coin can raise at most one lean per hour. "Market-wide" means at least 70% of scored coins leaned the same way at that moment (at least 5 scored): those leans mostly reflect the overall market, so the "not market-wide" rows show whether the scores add anything beyond market direction. Candles are built from one price sample per minute, so prices of thinly traded contracts can be stale, which makes results rougher than they look. Events from different coins at the same time are correlated, which is why the test counts distinct hours. If the test period is mostly one-directional, results mostly say how that kind of market behaved. Nothing here is financial advice.</div>
+<script src="futrules.js?v=3"></script>
+<script>
+var BASE = "https://scanner-relay.tanbir-eam-6ff.workers.dev";
+var HZS = [900, 3600, 10800], HN = ["15 min", "1 hour", "3 hours"];
+var hIdx = 1, res = null;
+document.getElementById("ver").textContent = FRules.CFG.version;
+
+function setStatus(cls, t){ var s = document.getElementById("status"); s.className = "bar " + cls; s.textContent = t; }
+function ub(arr, x){ var lo = 0, hi = arr.length; while (lo < hi){ var m = (lo + hi) >> 1; if (arr[m] > x) hi = m; else lo = m + 1; } return lo; }
+function pxAtFull(o, target){ var i = ub(o.ts, target) - 1; if (i < 0) return null; return (target - o.ts[i] <= 180) ? o.px[i] : null; }
+function fwd(o, entryT, lastTs){
+  var out = [null, null, null];
+  if (entryT > lastTs) return { e: null, r: out };
+  var e = pxAtFull(o, entryT);
+  if (!e) return { e: null, r: out };
+  for (var k = 0; k < 3; k++){
+    var tt = entryT + HZS[k];
+    if (tt <= lastTs){ var x = pxAtFull(o, tt); if (x) out[k] = (x / e - 1) * 100; }
+  }
+  return { e: e, r: out };
+}
+function pct(v, d){ if (v === null || v === undefined || isNaN(v)) return "<span class='mut'>n/a</span>"; return "<span class='" + (v >= 0 ? "up" : "dn") + "'>" + (v >= 0 ? "+" : "") + v.toFixed(d === undefined ? 2 : d) + "%</span>"; }
+function price(v){ if (v >= 100) return v.toLocaleString(undefined, {maximumFractionDigits: 2}); if (v >= 1) return v.toFixed(3); if (v >= 0.01) return v.toFixed(5); return v.toPrecision(3); }
+function fmtTime(t){ return new Date(t * 1000).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"}); }
+function mean(a){ return a.length ? a.reduce(function(s, v){ return s + v; }, 0) / a.length : null; }
+function nameOf(pn){ return pn.replace(/^Perpetual /, "").replace(/ US Dollar.*$/, ""); }
+
+function drawTabs(){
+  var h = "<span class='mut'>Holding time: </span>";
+  for (var k = 0; k < 3; k++) h += "<button class='" + (k === hIdx ? "on" : "") + "' onclick='pickH(" + k + ")'>" + HN[k] + (k === 1 ? " (primary)" : " (exploratory)") + "</button>";
+  document.getElementById("tabs").innerHTML = h;
+}
+function pickH(k){ hIdx = k; drawTabs(); render(); }
+
+async function run(){
+  var sv = document.getElementById("start").value;
+  var startT = sv ? Math.floor(new Date(sv).getTime() / 1000) : 0;
+  var nowSec = Math.floor(Date.now() / 1000);
+  var from = startT ? startT - 25 * 3600 : nowSec - 48 * 3600;
+  res = null;
+  try{
+    if (from > nowSec - 3600) throw new Error("The start time is in the future.");
+    setStatus("wait", "Loading product list...");
+    var sr = await fetch(BASE + "/product/specs/?active=true");
+    var sj = await sr.json();
+    var specs = Array.isArray(sj) ? sj : (sj && sj.data) || [];
+    var specBy = {};
+    specs.forEach(function(s){ if (s.type === "perpetual") specBy[s.product_id] = { sym: s.symbol, coin: nameOf(s.product_name) }; });
+
+    var chunk = 7200, total = Math.ceil((nowSec - from) / chunk);
+    var by = {}, snaps = 0, firstTs = null, lastTs = null;
+    for (var c = 0; c < total; c += 4){
+      setStatus("wait", "Loading data: part " + (c + 1) + " of " + total + "...");
+      var ps = [];
+      for (var k = c; k < Math.min(total, c + 4); k++){
+        var a = from + k * chunk, b = Math.min(nowSec, a + chunk - 1);
+        ps.push(fetch(BASE + "/recorder/range?from=" + a + "&to=" + b).then(function(r){ if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); }));
+      }
+      var results = await Promise.all(ps);
+      results.forEach(function(arr){
+        if (!Array.isArray(arr)) throw new Error("Unexpected reply. Did the Worker addition (Part A) get deployed?");
+        arr.forEach(function(sn){
+          var ts = sn[0];
+          if (firstTs === null) firstTs = ts;
+          lastTs = ts; snaps++;
+          sn[1].forEach(function(r){
+            var sp = specBy[r[0]];
+            if (!sp || r[2] === null) return;
+            var o = by[r[0]] || (by[r[0]] = { ts: [], px: [], tt: [], coin: sp.coin, sym: sp.sym });
+            o.ts.push(ts); o.px.push(r[2]); o.tt.push(r[3] ? Date.parse(r[3]) / 1000 : 0);
+          });
+        });
+      });
+    }
+    if (snaps < 600) throw new Error("Only " + snaps + " snapshots found.");
+    res = await analyze(by, firstTs, lastTs, startT);
+    res.snaps = snaps; res.firstTs = firstTs; res.lastTs = lastTs; res.startT = startT;
+    var warn = startT ? "" : " No start time set: results are NOT fair evidence.";
+    setStatus(startT ? "ok" : "wait", "Done: " + res.events.length + " leans found." + warn);
+    drawTabs(); render();
+  } catch(e){
+    setStatus("bad", "FAILED: " + e.message);
+  }
+}
+
+async function analyze(by, firstTs, lastTs, startT){
+  var pids = Object.keys(by), coins = {};
+  pids.forEach(function(p){ var cn = by[p].coin; (coins[cn] = coins[cn] || []).push(p); });
+  var events = [], bsum = [0, 0, 0], bcnt = [0, 0, 0], reg = { long: 0, short: 0, none: 0 }, evalTimes = 0, scoredCT = 0, lastEv = {};
+  var t0 = Math.max(startT, firstTs + 25 * 3600);
+  t0 = Math.ceil(t0 / 300) * 300;
+  var steps = 0;
+  for (var t = t0; t <= lastTs; t += 300){
+    evalTimes++;
+    var best = {};
+    Object.keys(coins).forEach(function(cn){
+      coins[cn].forEach(function(pid){
+        var o = by[pid], i = ub(o.ts, t) - 1;
+        if (i < 0 || o.ts[i] !== t) return;
+        var lo = ub(o.ts, t - 86401);
+        var view = { ts: o.ts.slice(lo, i + 1), px: o.px.slice(lo, i + 1), tt: o.tt.slice(lo, i + 1) };
+        var r = FRules.score(view, view.ts.length - 1);
+        var x = { ok: r.ok, trades: r.trades, r: r, pid: pid };
+        var cur = best[cn];
+        if (!cur || (x.ok && !cur.ok) || (x.ok === cur.ok && x.trades > cur.trades)) best[cn] = x;
+      });
+    });
+    var scored = Object.keys(best).filter(function(cn){ return best[cn].ok; });
+    var nL = 0, nS = 0;
+    scored.forEach(function(cn){ var b = best[cn].r.bias; if (b === "long") nL++; else if (b === "short") nS++; });
+    var mwSide = (scored.length >= 5 && Math.max(nL, nS) / scored.length >= 0.7) ? (nS >= nL ? "short" : "long") : null;
+    scored.forEach(function(cn){
+      var b = best[cn], r = b.r, o = by[b.pid];
+      scoredCT++; reg[r.bias]++;
+      if (t % 1800 === 0){
+        var fb = fwd(o, t + 60, lastTs);
+        for (var k = 0; k < 3; k++) if (fb.r[k] !== null){ bsum[k] += fb.r[k]; bcnt[k]++; }
+      }
+      if (r.bias !== "none" && (lastEv[cn] === undefined || t - lastEv[cn] >= 3600)){
+        var f = fwd(o, t + 60, lastTs);
+        events.push({ t: t, coin: cn, sym: o.sym, bias: r.bias, L: r.long.score, S: r.short.score, e: f.e, r: f.r, mw: mwSide === r.bias });
+        lastEv[cn] = t;
+      }
+    });
+    steps++;
+    if (steps % 12 === 0){
+      setStatus("wait", "Analyzing: " + fmtTime(t) + " (" + Math.round(100 * (t - t0) / Math.max(1, lastTs - t0)) + "%)...");
+      await new Promise(function(rs){ setTimeout(rs, 0); });
+    }
+  }
+  events.sort(function(x, y){ return y.t - x.t; });
+  return { events: events, bsum: bsum, bcnt: bcnt, reg: reg, evalTimes: evalTimes, scoredCT: scoredCT };
+}
+
+function render(){
+  if (!res) return;
+  var k = hIdx, cost = parseFloat(document.getElementById("cost").value);
+  if (isNaN(cost)) cost = 0.5;
+  var bAvg = res.bcnt[k] ? res.bsum[k] / res.bcnt[k] : null;
+  var tot = res.reg.long + res.reg.short + res.reg.none;
+  var spanH = (res.lastTs - Math.max(res.startT || res.firstTs, res.firstTs + 25 * 3600)) / 3600;
+  var regTxt = tot ? "Market regime in the test: " + (100 * res.reg.short / tot).toFixed(0) + "% of scored coin-times leaned SHORT, " + (100 * res.reg.long / tot).toFixed(0) + "% LONG, " + (100 * res.reg.none / tot).toFixed(0) + "% no lean." : "";
+  if (tot && Math.max(res.reg.short, res.reg.long) / tot > 0.85) regTxt += " ONE-DIRECTIONAL PERIOD: treat results with extra caution.";
+  document.getElementById("summary").textContent =
+    "Data loaded: " + res.snaps + " snapshots, " + fmtTime(res.firstTs) + " to " + fmtTime(res.lastTs) + ".\n" +
+    "Judged only from: " + (res.startT ? fmtTime(res.startT) : "the beginning (no start set)") + " (about " + Math.max(0, spanH).toFixed(1) + " hours).\n" +
+    "Time steps scored: " + res.evalTimes + ". Scored coin-times: " + res.scoredCT + ". Leans found: " + res.events.length + ".\n" +
+    regTxt + "\n" +
+    "Baseline (" + HN[k] + "): " + (bAvg === null ? "n/a" : (bAvg >= 0 ? "+" : "") + bAvg.toFixed(3) + "% average move of all scored coins, from " + res.bcnt[k] + " samples.") + "\n" +
+    "Assumed round-trip cost: " + cost.toFixed(2) + "%.";
+
+  var groups = [["LONG lean", "long", false], ["LONG lean, not market-wide", "long", true], ["SHORT lean", "short", false], ["SHORT lean, not market-wide", "short", true]];
+  var h = "<table><tr><th>Lean type</th><th>Events</th><th>Distinct hours</th><th>Completed (" + HN[k] + ")</th><th>Avg move</th><th>Median</th><th>Avg after cost</th><th>Win % after cost</th><th>Baseline</th><th>Better than baseline by</th><th>1st half after cost</th><th>2nd half after cost</th><th>Verdict</th></tr>";
+  groups.forEach(function(g){
+    var dir = g[1] === "long" ? 1 : -1;
+    var evs = res.events.filter(function(e){ return e.bias === g[1] && (!g[2] || !e.mw); });
+    var done = evs.filter(function(e){ return e.r[k] !== null; }).sort(function(x, y){ return x.t - y.t; });
+    var n = done.length;
+    if (!n){ h += "<tr><td>" + g[0] + "</td><td>" + evs.length + "</td><td colspan='11' class='mut'>no completed events yet</td></tr>"; return; }
+    var vals = done.map(function(e){ return dir * e.r[k]; });
+    var hrs = {}; done.forEach(function(e){ hrs[Math.floor(e.t / 3600)] = 1; });
+    var nh = Object.keys(hrs).length;
+    var avg = mean(vals), sorted = vals.slice().sort(function(x, y){ return x - y; });
+    var med = n % 2 ? sorted[(n - 1) / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
+    var wins = vals.filter(function(v){ return v - cost > 0; }).length;
+    var base = bAvg === null ? null : dir * bAvg, added = base === null ? null : avg - base;
+    var half = Math.floor(n / 2);
+    var a1 = half ? mean(vals.slice(0, half)) - cost : null, a2 = half ? mean(vals.slice(half)) - cost : null;
+    var verdict, pre = k === 1 ? "" : "exploratory: ";
+    if (n < 50 || nh < 20) verdict = "<span class='warnc'>" + pre + "too few (n=" + n + ", hours=" + nh + "; need 50 and 20)</span>";
+    else if (avg - cost > 0 && added !== null && added > 0 && a1 > 0 && a2 > 0) verdict = "<span class='up'>" + pre + "meets the bar (not proof)</span>";
+    else verdict = "<span class='dn'>" + pre + "does not meet the bar</span>";
+    h += "<tr><td>" + g[0] + "</td><td>" + evs.length + "</td><td>" + nh + "</td><td>" + n + "</td><td>" + pct(avg) + "</td><td>" + pct(med) + "</td><td>" + pct(avg - cost) + "</td><td>" + (100 * wins / n).toFixed(0) + "%</td><td>" + pct(base) + "</td><td>" + pct(added) + "</td><td>" + pct(a1) + "</td><td>" + pct(a2) + "</td><td>" + verdict + "</td></tr>";
+  });
+  document.getElementById("stats").innerHTML = h + "</table>";
+
+  var e2 = "<table><tr><th>Time</th><th>Coin</th><th>Contract</th><th>Lean</th><th>LONG</th><th>SHORT</th><th>Market-wide</th><th>Entry</th><th>15 min</th><th>1 hour</th><th>3 hours</th></tr>";
+  res.events.slice(0, 100).forEach(function(e){
+    var dir = e.bias === "long" ? 1 : -1;
+    function cell(v){ return v === null ? "<span class='mut'>pending</span>" : pct(dir * v); }
+    e2 += "<tr><td>" + fmtTime(e.t) + "</td><td>" + e.coin + "</td><td>" + e.sym + "</td><td class='" + (dir === 1 ? "up" : "dn") + "'>" + e.bias.toUpperCase() + "</td><td>" + e.L + "</td><td>" + e.S + "</td><td>" + (e.mw ? "yes" : "no") + "</td><td>" + (e.e === null ? "n/a" : price(e.e)) + "</td><td>" + cell(e.r[0]) + "</td><td>" + cell(e.r[1]) + "</td><td>" + cell(e.r[2]) + "</td></tr>";
+  });
+  if (!res.events.length) e2 += "<tr><td colspan='11' class='mut'>No leans in this period.</td></tr>";
+  document.getElementById("events").innerHTML = e2 + "</table>";
+}
+drawTabs();
+</script>
+</body>
+</html>
