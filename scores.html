@@ -30,8 +30,8 @@
 <div class="tabs" id="tabs"></div>
 <div id="status" class="bar wait">Loading...</div>
 <div id="out"></div>
-<div class="warn">Scores measure how well the technicals line up (trend size, timeframe agreement, momentum, structure), minus a penalty when a coin has already moved far over 1 hour, 3 hours or the loaded history. They are NOT win probabilities and are untested. Not used: live volume, open interest, VWAP and ADX (unavailable at this data quality). Candles come from one price sample per minute, so they have no wicks. Coins that trade rarely are not scored. Reference levels appear only when the first target is at least 2x an assumed round-trip cost (an assumption, not a measured fee); the stop is the farther of the 1-hour swing point and 2.5x the recent average 5-minute move, and targets are 1x, 2x and 3x that distance: they are reference points, not predictions. "Trades seen" counts distinct last-trade times in the sampled data and understates real trade counts. When most coins lean the same way, that is usually one market-wide move. Leveraged futures can lose more than you put in. This is not financial advice.</div>
-<script src="futrules.js?v=2"></script>
+<div class="warn">Scores measure how well the technicals line up (trend size, timeframe agreement, momentum, structure), minus a penalty when a coin has already moved far over 1 hour, 3 hours or the loaded history. A high score means everything points the same way, not that a big move is coming. They are NOT win probabilities and are untested. Not used: live volume, open interest, VWAP and ADX (unavailable at this data quality). Candles come from one price sample per minute, so they have no wicks. Coins that trade rarely are not scored. Reference levels appear only when the first target is at least 2x an assumed round-trip cost (an assumption, not a measured fee); the stop is the farther of the 1-hour swing point and 2.5x the recent average 5-minute move, and targets are 1x, 2x and 3x that distance: they are reference points, not predictions. "Trades seen" counts distinct last-trade times in the sampled data and understates real trade counts. When most coins lean the same way, that is usually one market-wide move. Leveraged futures can lose more than you put in. This is not financial advice.</div>
+<script src="futrules.js?v=3"></script>
 <script>
 var BASE = "https://scanner-relay.tanbir-eam-6ff.workers.dev";
 var view = "board", cache = null;
@@ -130,11 +130,11 @@ function render(c){
 
   var h = banner;
   if (view === "board"){
-    var tl = scored.slice().sort(function(a, b){ return b.res.long.score - a.res.long.score; }).slice(0, 5);
-    var ts = scored.slice().sort(function(a, b){ return b.res.short.score - a.res.short.score; }).slice(0, 5);
+    var tl = scored.filter(function(x){ return x.res.long.score >= 40; }).sort(function(a, b){ return b.res.long.score - a.res.long.score; }).slice(0, 5);
+    var ts = scored.filter(function(x){ return x.res.short.score >= 40; }).sort(function(a, b){ return b.res.short.score - a.res.short.score; }).slice(0, 5);
     var anyLean = scored.some(function(x){ return x.res.bias !== "none"; });
-    h += "<h2>Top 5 by LONG score</h2><div class='wrap'><table>" + headRow() + tl.map(row).join("") + (tl.length ? "" : "<tr><td colspan='15' class='mut'>Nothing scored right now.</td></tr>") + "</table></div>";
-    h += "<h2>Top 5 by SHORT score</h2><div class='wrap'><table>" + headRow() + ts.map(row).join("") + (ts.length ? "" : "<tr><td colspan='15' class='mut'>Nothing scored right now.</td></tr>") + "</table></div>";
+    h += "<h2>Top coins by LONG score (40 or more)</h2><div class='wrap'><table>" + headRow() + tl.map(row).join("") + (tl.length ? "" : "<tr><td colspan='15' class='mut'>No coin has a LONG score of 40 or more right now.</td></tr>") + "</table></div>";
+    h += "<h2>Top coins by SHORT score (40 or more)</h2><div class='wrap'><table>" + headRow() + ts.map(row).join("") + (ts.length ? "" : "<tr><td colspan='15' class='mut'>No coin has a SHORT score of 40 or more right now.</td></tr>") + "</table></div>";
     if (!anyLean) h += "<div class='sub' style='margin-top:10px'>No coin has a clear lean right now (score of 60+ and 25+ ahead of the other side). Doing nothing is a valid answer.</div>";
   } else {
     list.sort(function(a, b){
