@@ -5,7 +5,7 @@ var Rules = (function () {
   var CFG = {
     version: "v1",
     minUsd24: 50000,
-    watchMinUsd24: 250000,
+    pullbackMinUsd24: 500000,
     minRec5Usd: 10000,
     relFlag: 3,
     extMove15: 12,
