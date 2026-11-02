@@ -123,7 +123,7 @@ var Rules = (function () {
 
     // Pullback guide for coins that already moved
     var lv = null;
-    if (warn !== "" || label === "Extended up" || label === "Extended down") {
+        if ((warn !== "" || label === "Extended up" || label === "Extended down") && usd24 >= CFG.pullbackMinUsd24) {
       var s3 = ub(o.ts, t - 10800), h3 = px, l3 = px;
       for (j = s3; j <= i; j++) { var v = o.px[j]; if (v > h3) h3 = v; if (v < l3) l3 = v; }
       var up = label === "Extended up" || (c60 !== null && c60 >= CFG.warnMove1h) ||
