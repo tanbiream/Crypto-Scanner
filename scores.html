@@ -13,6 +13,7 @@
   .ok{background:#12351f;color:#3fb950}
   .bad{background:#3d1417;color:#f85149}
   .wait{background:#2a2410;color:#d29922}
+  .note{background:#2a2410;color:#d29922;padding:9px;border-radius:8px;margin-bottom:10px}
   .tabs button{background:#21262d;color:#e6edf3;border:0;border-radius:8px;padding:8px 14px;font-size:14px;margin:0 6px 6px 0}
   .tabs button.on{background:#238636}
   .wrap{overflow-x:auto;margin-top:8px}
@@ -29,8 +30,8 @@
 <div class="tabs" id="tabs"></div>
 <div id="status" class="bar wait">Loading...</div>
 <div id="out"></div>
-<div class="warn">Scores measure how well the technicals line up (trend, timeframe agreement, momentum, structure). They are NOT win probabilities and are untested. Not used: live volume, open interest, VWAP and ADX (unavailable at this data quality). Candles come from one price sample per minute, so they have no wicks. Coins that trade rarely are not scored. Reference levels are the recent 1-hour swing point as a stop, plus 1x, 2x and 3x that distance as targets: they are reference points, not predictions. "Trades seen" counts distinct last-trade times in the sampled data and understates real trade counts. Leveraged futures can lose more than you put in. This is not financial advice.</div>
-<script src="futrules.js?v=1"></script>
+<div class="warn">Scores measure how well the technicals line up (trend size, timeframe agreement, momentum, structure), minus a penalty when a coin has already moved far over 1 hour, 3 hours or the loaded history. They are NOT win probabilities and are untested. Not used: live volume, open interest, VWAP and ADX (unavailable at this data quality). Candles come from one price sample per minute, so they have no wicks. Coins that trade rarely are not scored. Reference levels appear only when the first target is at least 2x an assumed round-trip cost (an assumption, not a measured fee); the stop is the farther of the 1-hour swing point and 2.5x the recent average 5-minute move, and targets are 1x, 2x and 3x that distance: they are reference points, not predictions. "Trades seen" counts distinct last-trade times in the sampled data and understates real trade counts. When most coins lean the same way, that is usually one market-wide move. Leveraged futures can lose more than you put in. This is not financial advice.</div>
+<script src="futrules.js?v=2"></script>
 <script>
 var BASE = "https://scanner-relay.tanbir-eam-6ff.workers.dev";
 var view = "board", cache = null;
@@ -40,7 +41,7 @@ function nameOf(pn){ return pn.replace(/^Perpetual /, "").replace(/ US Dollar.*$
 function price(v){ if (v >= 100) return v.toLocaleString(undefined, {maximumFractionDigits: 2}); if (v >= 1) return v.toFixed(3); if (v >= 0.01) return v.toFixed(5); return v.toPrecision(3); }
 function arrow(s){ return (s === null || s === undefined) ? "<span class='mut'>n/a</span>" : s === 1 ? "<span class='up'>&#9650;</span>" : s === -1 ? "<span class='dn'>&#9660;</span>" : "<span class='mut'>-</span>"; }
 function sc(v, cls){ return "<b class='" + (v >= 60 ? cls : v >= 40 ? "warnc" : "mut") + "'>" + v + "</b>"; }
-function pct(v){ return v === null ? "<span class='mut'>n/a</span>" : "<span class='" + (v >= 0 ? "up" : "dn") + "'>" + (v >= 0 ? "+" : "") + v.toFixed(2) + "%</span>"; }
+function pct(v){ return v === null || v === undefined ? "<span class='mut'>n/a</span>" : "<span class='" + (v >= 0 ? "up" : "dn") + "'>" + (v >= 0 ? "+" : "") + v.toFixed(2) + "%</span>"; }
 function setStatus(cls, t){ var s = document.getElementById("status"); s.className = "bar " + cls; s.textContent = t; }
 
 function drawTabs(){
@@ -68,17 +69,17 @@ async function load(){
 }
 
 function headRow(){
-  return "<tr><th>Coin</th><th>Contract</th><th>Price (USD)</th><th>LONG</th><th>SHORT</th><th>Lean</th><th>5m</th><th>15m</th><th>1h</th><th>RSI</th><th>1h chg</th><th>Trades seen (1h)</th><th>Why</th><th>Reference levels</th></tr>";
+  return "<tr><th>Coin</th><th>Contract</th><th>Price (USD)</th><th>LONG</th><th>SHORT</th><th>Lean</th><th>5m</th><th>15m</th><th>1h</th><th>RSI</th><th>1h chg</th><th>3h chg</th><th>Trades seen (1h)</th><th>Why</th><th>Reference levels</th></tr>";
 }
 function row(x){
   var r = x.res;
-  if (!r.ok) return "<tr><td>" + x.coin + "</td><td>" + x.sym + "</td><td>" + price(x.px) + "</td><td colspan='11' class='mut'>not scored: " + r.reason + "</td></tr>";
+  if (!r.ok) return "<tr><td>" + x.coin + "</td><td>" + x.sym + "</td><td>" + price(x.px) + "</td><td colspan='12' class='mut'>not scored: " + r.reason + "</td></tr>";
   var lean = r.bias === "long" ? "<span class='up'>LONG lean</span>" : r.bias === "short" ? "<span class='dn'>SHORT lean</span>" : "<span class='mut'>no clear lean</span>";
   var sd = r.short.score > r.long.score ? r.short : r.long;
   var lvTxt = "";
   if (r.lv) lvTxt = "stop " + price(r.lv.inv) + " (" + r.lv.riskPct.toFixed(2) + "% away); 1R " + price(r.lv.t1) + ", 2R " + price(r.lv.t2) + ", 3R " + price(r.lv.t3) + "; 5m EMA20 " + price(r.lv.pull);
-  else if (r.bias !== "none") lvTxt = "<span class='warnc'>no levels (chasing risk or stop too close/far)</span>";
-  return "<tr><td>" + x.coin + "</td><td>" + x.sym + "</td><td>" + price(r.px) + "</td><td>" + sc(r.long.score, "up") + "</td><td>" + sc(r.short.score, "dn") + "</td><td>" + lean + "</td><td>" + arrow(r.m5) + "</td><td>" + arrow(r.m15) + "</td><td>" + arrow(r.m60) + "</td><td>" + (r.rsi === null ? "n/a" : r.rsi.toFixed(0)) + "</td><td>" + pct(r.ch60) + "</td><td>" + r.trades + "</td><td class='mut'>" + sd.why.join("; ") + "</td><td>" + lvTxt + "</td></tr>";
+  else if (r.bias !== "none") lvTxt = "<span class='warnc'>" + r.lvNote + "</span>";
+  return "<tr><td>" + x.coin + "</td><td>" + x.sym + "</td><td>" + price(r.px) + "</td><td>" + sc(r.long.score, "up") + "</td><td>" + sc(r.short.score, "dn") + "</td><td>" + lean + "</td><td>" + arrow(r.m5) + "</td><td>" + arrow(r.m15) + "</td><td>" + arrow(r.m60) + "</td><td>" + (r.rsi === null ? "n/a" : r.rsi.toFixed(0)) + "</td><td>" + pct(r.ch60) + "</td><td>" + pct(r.ch3) + "</td><td>" + r.trades + "</td><td class='mut'>" + sd.why.join("; ") + "</td><td>" + lvTxt + "</td></tr>";
 }
 
 function render(c){
@@ -119,13 +120,21 @@ function render(c){
   if (stale) setStatus("bad", "STALE: newest data is " + age + " seconds old. Scores are turned off.");
   else setStatus(scored.length ? "ok" : "wait", "LIVE: newest snapshot " + age + "s old. " + scored.length + " of " + list.length + " coins scored (others are thin, quiet or warming up).");
 
-  var h = "";
+  var nL = scored.filter(function(x){ return x.res.bias === "long"; }).length;
+  var nS = scored.filter(function(x){ return x.res.bias === "short"; }).length;
+  var banner = "";
+  if (scored.length >= 5 && Math.max(nL, nS) / scored.length >= 0.7){
+    var side = nS >= nL ? "SHORT" : "LONG", cnt = Math.max(nL, nS);
+    banner = "<div class='note'>" + cnt + " of " + scored.length + " scored coins lean " + side + ". That is one market-wide move, not " + cnt + " separate signals. When nearly everything points the same way, the move is often already well under way.</div>";
+  }
+
+  var h = banner;
   if (view === "board"){
     var tl = scored.slice().sort(function(a, b){ return b.res.long.score - a.res.long.score; }).slice(0, 5);
     var ts = scored.slice().sort(function(a, b){ return b.res.short.score - a.res.short.score; }).slice(0, 5);
     var anyLean = scored.some(function(x){ return x.res.bias !== "none"; });
-    h += "<h2>Top 5 by LONG score</h2><div class='wrap'><table>" + headRow() + tl.map(row).join("") + (tl.length ? "" : "<tr><td colspan='14' class='mut'>Nothing scored right now.</td></tr>") + "</table></div>";
-    h += "<h2>Top 5 by SHORT score</h2><div class='wrap'><table>" + headRow() + ts.map(row).join("") + (ts.length ? "" : "<tr><td colspan='14' class='mut'>Nothing scored right now.</td></tr>") + "</table></div>";
+    h += "<h2>Top 5 by LONG score</h2><div class='wrap'><table>" + headRow() + tl.map(row).join("") + (tl.length ? "" : "<tr><td colspan='15' class='mut'>Nothing scored right now.</td></tr>") + "</table></div>";
+    h += "<h2>Top 5 by SHORT score</h2><div class='wrap'><table>" + headRow() + ts.map(row).join("") + (ts.length ? "" : "<tr><td colspan='15' class='mut'>Nothing scored right now.</td></tr>") + "</table></div>";
     if (!anyLean) h += "<div class='sub' style='margin-top:10px'>No coin has a clear lean right now (score of 60+ and 25+ ahead of the other side). Doing nothing is a valid answer.</div>";
   } else {
     list.sort(function(a, b){
@@ -134,7 +143,7 @@ function render(c){
       var bm = b.res.ok ? Math.max(b.res.long.score, b.res.short.score) : 0;
       return bm - am;
     });
-    h = "<div class='wrap'><table>" + headRow() + list.map(row).join("") + "</table></div>";
+    h += "<div class='wrap'><table>" + headRow() + list.map(row).join("") + "</table></div>";
   }
   document.getElementById("out").innerHTML = h;
 }
