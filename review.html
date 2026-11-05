@@ -24,18 +24,23 @@
   .up{color:#3fb950}.dn{color:#f85149}.mut{color:#8b949e}.warnc{color:#d29922}
   .warn{color:#8b949e;font-size:11px;margin-top:14px;line-height:1.6}
   pre{background:#161b22;padding:8px;border-radius:6px;white-space:pre-wrap;margin:6px 0}
+  .rule{background:#161b22;border-left:3px solid #58a6ff;padding:8px 10px;margin:10px 0;line-height:1.6}
 </style>
 </head>
 <body>
 <h1>Radar Review</h1>
 <div class="sub">Replays recorded Kraken spot snapshots with the shared rules (<span id="ver"></span>), finds every flag, Watch entry and pullback setup using only data available at that moment, then measures what price did afterward. Analysis only.</div>
+<div class="rule"><b>Pass/fail bars, written before more data arrives (cost 1.0% round trip, 3-hour hold for Watch):</b><br>
+<b>Watch</b> (each direction): (1) at least 50 completed entries spread over at least 20 different hours; (2) hit rate at least 1.5x the random-coin hit rate; (3) average move in the watched direction minus cost above zero, and above the random-coin average in the same direction; (4) average after cost above zero in BOTH halves of the period.<br>
+<b>Pullback</b>: (1) at least 50 completed setups spread over at least 7 different days; (2) waiting for the pullback zone averages above zero per setup after cost and beats chasing; (3) above zero in BOTH halves.<br>
+These numbers were set after seeing one day of Watch results and the first pullback results, so they are not perfectly blind. Meeting a bar is not proof of a profitable strategy.</div>
 <div class="ctl">
-  <label>History <select id="hours"><option value="6">6 hours</option><option value="12">12 hours</option><option value="24" selected>24 hours</option><option value="48">48 hours</option></select></label>
-  <label>Rules start (only judge flags after this) <input id="start" type="datetime-local"></label>
+  <label>Load <select id="mode"><option value="since" selected>Since rules start (up to 14 days)</option><option value="24">Last 24 hours</option><option value="48">Last 48 hours</option></select></label>
+  <label>Rules start <input id="start" type="datetime-local" value="2026-11-02T13:21"></label>
   <label>Round-trip cost % <input id="cost" type="number" step="0.1" value="1.0" style="width:70px" onchange="render()"></label>
   <button class="run" onclick="run()">Run review</button>
 </div>
-<div class="bar wait" id="status">Press "Run review". Set "Rules start" to the commit time of rules.js.</div>
+<div class="bar wait" id="status">Press "Run review". Loading many days of data can take a few minutes.</div>
 <pre id="summary"></pre>
 <h2>1. Watch list test (success = price moves 5% or more in the watched direction within 3 hours)</h2>
 <div class="wrap" id="watchstats"></div>
@@ -48,8 +53,8 @@
 <div class="wrap" id="watchlist"></div>
 <h2>Main flags (newest first, up to 100)</h2>
 <div class="wrap" id="events"></div>
-<div class="warn">How to read this: entry is the recorded price one minute after the signal. The cost is an assumption you can change, not a measured fee, and thin coins can cost more. "Baseline" is how often random liquid coins at sampled times did the same thing in the same period. For the pullback test, fills are assumed at exactly the zone price and stops at exactly the invalidation price, which is optimistic. Short ideas are hypothetical because spot is not assumed to be shortable. A coin raises at most one signal of each kind per hour. If "Rules start" is empty, the results include data that was used to design earlier rules and are not fair evidence. A few days, or a weekend, say little about other markets. A positive result here is not proof of a profitable strategy, and nothing here is financial advice.</div>
-<script src="rules.js?v=1"></script>
+<div class="warn">How to read this: entry is the recorded price one minute after the signal. The cost is an assumption you can change, not a measured fee, and thin coins can cost more. "Baseline" is how random liquid coins at sampled times did in the same period, so a falling or rising market is not credited to a signal. For the pullback test, fills are assumed at exactly the zone price and stops at exactly the invalidation price, which is optimistic; setups that never fill count as zero. Short ideas are hypothetical because spot is not assumed to be shortable. A coin raises at most one signal of each kind per hour. Entries from different coins at the same time are correlated, which is why the bars count distinct hours and days. If "Rules start" is empty, the results include data used to design earlier rules and are not fair evidence. A few days, or one-directional markets, say little about other markets. Nothing here is financial advice.</div>
+<script src="rules.js?v=4"></script>
 <script>
 var BASE = "https://scanner-relay.tanbir-eam-6ff.workers.dev";
 var HZS = [900, 3600, 10800], HN = ["15 min", "1 hour", "3 hours"];
@@ -62,6 +67,9 @@ function pct(v, d){ if (v === null || v === undefined || isNaN(v)) return "<span
 function price(v){ if (v >= 100) return v.toLocaleString(undefined, {maximumFractionDigits: 2}); if (v >= 1) return v.toFixed(3); if (v >= 0.01) return v.toFixed(5); return v.toPrecision(3); }
 function fmtTime(t){ return new Date(t * 1000).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"}); }
 function mean(a){ return a.length ? a.reduce(function(s, v){ return s + v; }, 0) / a.length : null; }
+function distinct(arr, f){ var o = {}; arr.forEach(function(e){ o[f(e)] = 1; }); return Object.keys(o).length; }
+function hourKey(e){ return Math.floor(e.t / 3600); }
+function dayKey(e){ return new Date(e.t * 1000).toDateString(); }
 
 function fwd(o, entryT, lastTs){
   var out = [null, null, null];
@@ -75,19 +83,19 @@ function fwd(o, entryT, lastTs){
   return { e: e, r: out };
 }
 function fwdExt(o, entryT, lastTs){
-  var res = { e: null, up: null, dn: null, r3: null };
+  var out = { e: null, up: null, dn: null, r3: null };
   var e = entryT <= lastTs ? Rules.pxAt(o, entryT) : null;
-  if (!e) return res;
-  res.e = e;
+  if (!e) return out;
+  out.e = e;
   var end = entryT + 10800;
-  if (end > lastTs) return res;
+  if (end > lastTs) return out;
   var mx = e, mn = e, j = Rules.ub(o.ts, entryT - 1);
   while (j < o.ts.length && o.ts[j] <= end){ var v = o.px[j]; if (v > mx) mx = v; if (v < mn) mn = v; j++; }
   var x = Rules.pxAt(o, end);
-  res.up = mx >= e * (1 + SUCC / 100);
-  res.dn = mn <= e * (1 - SUCC / 100);
-  res.r3 = x ? (x / e - 1) * 100 : null;
-  return res;
+  out.up = mx >= e * (1 + SUCC / 100);
+  out.dn = mn <= e * (1 - SUCC / 100);
+  out.r3 = x ? (x / e - 1) * 100 : null;
+  return out;
 }
 function pbTest(o, t, lv, lastTs){
   var entryT = t + 60, e = entryT <= lastTs ? Rules.pxAt(o, entryT) : null;
@@ -121,38 +129,49 @@ function drawTabs(){
 function pickH(k){ hIdx = k; drawTabs(); render(); }
 
 async function run(){
-  var hours = parseInt(document.getElementById("hours").value, 10);
+  var mode = document.getElementById("mode").value;
   var sv = document.getElementById("start").value;
   var startT = sv ? Math.floor(new Date(sv).getTime() / 1000) : 0;
-  var nowSec = Math.floor(Date.now() / 1000);
-  var from = nowSec - hours * 3600, chunk = 7200;
-  var total = Math.ceil((nowSec - from) / chunk);
-  var by = {}, snaps = 0, firstTs = null, lastTs = null;
+  var nowSec = Math.floor(Date.now() / 1000), from, note = "";
   res = null;
+  if (mode === "since"){
+    if (!startT){ setStatus("bad", "Set a Rules start time first."); return; }
+    from = startT - 7200;
+    var maxBack = nowSec - 14 * 86400;
+    if (from < maxBack){ from = maxBack; note = " Only the last 14 days were loaded, so the start was clipped."; }
+  } else {
+    from = nowSec - parseInt(mode, 10) * 3600;
+  }
+  var chunk = 7200, total = Math.ceil((nowSec - from) / chunk);
+  var by = {}, snaps = 0, firstTs = null, lastTs = null;
   try{
-    for (var c = 0; c < total; c++){
+    for (var c = 0; c < total; c += 4){
       setStatus("wait", "Loading data: part " + (c + 1) + " of " + total + "...");
-      var a = from + c * chunk, b = Math.min(nowSec, a + chunk - 1);
-      var r = await fetch(BASE + "/radar/range?from=" + a + "&to=" + b);
-      if (!r.ok) throw new Error("HTTP " + r.status);
-      var arr = await r.json();
-      if (!Array.isArray(arr)) throw new Error("Unexpected reply from the Worker.");
-      arr.forEach(function(sn){
-        var ts = sn[0];
-        if (firstTs === null) firstTs = ts;
-        lastTs = ts; snaps++;
-        sn[1].forEach(function(row){
-          if (row[0].indexOf(".") >= 0) return;
-          var o = by[row[0]] || (by[row[0]] = { ts: [], px: [], vol: [], v24: [], open: [] });
-          o.ts.push(ts); o.px.push(row[1]); o.vol.push(row[2]); o.v24.push(row[3]); o.open.push(row[5]);
+      var ps = [];
+      for (var k = c; k < Math.min(total, c + 4); k++){
+        var a = from + k * chunk, b = Math.min(nowSec, a + chunk - 1);
+        ps.push(fetch(BASE + "/radar/range?from=" + a + "&to=" + b).then(function(r){ if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); }));
+      }
+      var results = await Promise.all(ps);
+      results.forEach(function(arr){
+        if (!Array.isArray(arr)) throw new Error("Unexpected reply from the Worker.");
+        arr.forEach(function(sn){
+          var ts = sn[0];
+          if (firstTs === null) firstTs = ts;
+          lastTs = ts; snaps++;
+          sn[1].forEach(function(row){
+            if (row[0].indexOf(".") >= 0) return;
+            var o = by[row[0]] || (by[row[0]] = { ts: [], px: [], vol: [], v24: [], open: [] });
+            o.ts.push(ts); o.px.push(row[1]); o.vol.push(row[2]); o.v24.push(row[3]); o.open.push(row[5]);
+          });
         });
       });
     }
     if (snaps < 60) throw new Error("Only " + snaps + " snapshots found. Need at least 60 minutes of data.");
     res = await analyzeAll(by, firstTs, lastTs, startT);
     res.snaps = snaps; res.firstTs = firstTs; res.lastTs = lastTs; res.startT = startT; res.coins = Object.keys(by).length;
-    var note = startT ? "" : " No rules start set: results are NOT fair evidence.";
-    setStatus(startT ? "ok" : "wait", "Done: " + res.flags.length + " flags, " + res.watches.length + " watch entries, " + res.pbs.length + " pullback setups." + note);
+    var warn = startT ? "" : " No rules start set: results are NOT fair evidence.";
+    setStatus(startT ? "ok" : "wait", "Done: " + res.flags.length + " flags, " + res.watches.length + " watch entries, " + res.pbs.length + " pullback setups." + warn + note);
     drawTabs(); render();
   } catch(e){
     setStatus("bad", "FAILED: " + e.message);
@@ -161,7 +180,7 @@ async function run(){
 
 async function analyzeAll(by, firstTs, lastTs, startT){
   var keys = Object.keys(by), flags = [], watches = [], pbs = [];
-  var bsum = [0, 0, 0], bcnt = [0, 0, 0], bn = 0, bup = 0, bdn = 0, evalCount = 0;
+  var bsum = [0, 0, 0], bcnt = [0, 0, 0], bn = 0, bup = 0, bdn = 0, br3 = 0, br3n = 0, evalCount = 0;
   for (var ki = 0; ki < keys.length; ki++){
     var o = by[keys[ki]], n = o.ts.length;
     if (n >= 40){
@@ -178,7 +197,7 @@ async function analyzeAll(by, firstTs, lastTs, startT){
           for (var k = 0; k < 3; k++) if (fb.r[k] !== null){ bsum[k] += fb.r[k]; bcnt[k]++; }
           if (r.usd24 >= Rules.CFG.watchMinUsd24){
             var xb = fwdExt(o, t + 60, lastTs);
-            if (xb.up !== null){ bn++; if (xb.up) bup++; if (xb.dn) bdn++; }
+            if (xb.up !== null){ bn++; if (xb.up) bup++; if (xb.dn) bdn++; if (xb.r3 !== null){ br3 += xb.r3; br3n++; } }
           }
         }
         if (r.label && t - lf >= 3600){
@@ -205,7 +224,7 @@ async function analyzeAll(by, firstTs, lastTs, startT){
   }
   flags.sort(function(x, y){ return y.t - x.t; });
   watches.sort(function(x, y){ return y.t - x.t; });
-  return { flags: flags, watches: watches, pbs: pbs, bsum: bsum, bcnt: bcnt, bn: bn, bup: bup, bdn: bdn, evalCount: evalCount };
+  return { flags: flags, watches: watches, pbs: pbs, bsum: bsum, bcnt: bcnt, bn: bn, bup: bup, bdn: bdn, br3: br3, br3n: br3n, evalCount: evalCount };
 }
 
 function render(){
@@ -213,44 +232,58 @@ function render(){
   var k = hIdx, cost = parseFloat(document.getElementById("cost").value);
   if (isNaN(cost)) cost = 1;
   var bAvg = res.bcnt[k] ? res.bsum[k] / res.bcnt[k] : null;
+  var drift = res.br3n ? res.br3 / res.br3n : null;
   document.getElementById("summary").textContent =
     "Data: " + res.snaps + " snapshots, " + fmtTime(res.firstTs) + " to " + fmtTime(res.lastTs) + ", " + res.coins + " coins seen.\n" +
     "Judged only from: " + (res.startT ? fmtTime(res.startT) : "the beginning of the loaded data (no rules start set)") + ".\n" +
     "Coin-minutes checked: " + res.evalCount + ".\n" +
-    "Watch baseline: " + res.bn + " random liquid coin-times; " + (res.bn ? (100 * res.bup / res.bn).toFixed(1) + "% rose " + Rules.CFG.successPct + "%+ within 3h, " + (100 * res.bdn / res.bn).toFixed(1) + "% fell " + Rules.CFG.successPct + "%+." : "none completed yet.") + "\n" +
+    "Random liquid coin-times: " + res.bn + (res.bn ? "; " + (100 * res.bup / res.bn).toFixed(1) + "% rose " + Rules.CFG.successPct + "%+ within 3h, " + (100 * res.bdn / res.bn).toFixed(1) + "% fell " + Rules.CFG.successPct + "%+; average 3h move of random coins " + (drift >= 0 ? "+" : "") + (drift === null ? "n/a" : drift.toFixed(3) + "%") + " (market drift)." : " (none completed yet).") + "\n" +
     "Assumed round-trip cost: " + cost.toFixed(2) + "%.";
 
   // 1. Watch
-  var wh = "<table><tr><th>Watching for</th><th>Entries</th><th>Completed (3h)</th><th>Hit rate</th><th>Random coins hit rate</th><th>Ratio</th><th>Avg 3h move (direction of idea)</th><th>After cost</th><th>Verdict</th></tr>";
+  var wh = "<table><tr><th>Watching for</th><th>Entries</th><th>Distinct hours</th><th>Completed (3h)</th><th>Hit rate</th><th>Random coins hit rate</th><th>Ratio</th><th>Avg 3h move (direction of idea)</th><th>Random coins avg (same direction)</th><th>Better than random by</th><th>Avg after cost</th><th>1st half after cost</th><th>2nd half after cost</th><th>Verdict</th></tr>";
   ["up", "down"].forEach(function(dir){
+    var d = dir === "up" ? 1 : -1;
     var evs = res.watches.filter(function(e){ return e.dir === dir; });
-    var done = evs.filter(function(e){ return e.hit !== null; });
+    var done = evs.filter(function(e){ return e.hit !== null; }).sort(function(x, y){ return x.t - y.t; });
     var n = done.length, hits = done.filter(function(e){ return e.hit; }).length;
-    var base = res.bn ? (dir === "up" ? res.bup : res.bdn) / res.bn : null;
+    var nh = distinct(done, hourKey);
     var rate = n ? hits / n : null;
-    var avg = mean(done.filter(function(e){ return e.r3 !== null; }).map(function(e){ return dir === "up" ? e.r3 : -e.r3; }));
+    var baseRate = res.bn ? (dir === "up" ? res.bup : res.bdn) / res.bn : null;
+    var vals = done.filter(function(e){ return e.r3 !== null; }).map(function(e){ return d * e.r3; });
+    var avg = mean(vals);
+    var base = drift === null ? null : d * drift;
+    var added = (avg !== null && base !== null) ? avg - base : null;
+    var half = Math.floor(vals.length / 2);
+    var a1 = half ? mean(vals.slice(0, half)) - cost : null, a2 = half ? mean(vals.slice(half)) - cost : null;
+    var ratio = (rate !== null && baseRate) ? rate / baseRate : null;
     var verdict;
-    if (n < 30) verdict = "<span class='warnc'>too few (n=" + n + ", need 30+)</span>";
-    else if (base !== null && rate > base * 1.5 && avg !== null && avg - cost > 0) verdict = "<span class='up'>promising here (not proof)</span>";
-    else verdict = "<span class='dn'>no edge shown</span>";
-    wh += "<tr><td>move " + dir + "</td><td>" + evs.length + "</td><td>" + n + "</td><td>" + (rate === null ? "n/a" : (100 * rate).toFixed(1) + "%") + "</td><td>" + (base === null ? "n/a" : (100 * base).toFixed(1) + "%") + "</td><td>" + (rate !== null && base ? (rate / base).toFixed(1) + "x" : "n/a") + "</td><td>" + pct(avg) + "</td><td>" + (avg === null ? "n/a" : pct(avg - cost)) + "</td><td>" + verdict + "</td></tr>";
+    if (n < 50 || nh < 20) verdict = "<span class='warnc'>too few (n=" + n + ", hours=" + nh + "; need 50 and 20)</span>";
+    else if (ratio >= 1.5 && avg - cost > 0 && added > 0 && a1 > 0 && a2 > 0) verdict = "<span class='up'>meets the bar (not proof)</span>";
+    else verdict = "<span class='dn'>does not meet the bar</span>";
+    wh += "<tr><td>move " + dir + "</td><td>" + evs.length + "</td><td>" + nh + "</td><td>" + n + "</td><td>" + (rate === null ? "n/a" : (100 * rate).toFixed(1) + "%") + "</td><td>" + (baseRate === null ? "n/a" : (100 * baseRate).toFixed(1) + "%") + "</td><td>" + (ratio === null ? "n/a" : ratio.toFixed(1) + "x") + "</td><td>" + pct(avg) + "</td><td>" + pct(base) + "</td><td>" + pct(added) + "</td><td>" + (avg === null ? "n/a" : pct(avg - cost)) + "</td><td>" + pct(a1) + "</td><td>" + pct(a2) + "</td><td>" + verdict + "</td></tr>";
   });
   document.getElementById("watchstats").innerHTML = wh + "</table>";
 
   // 2. Pullback
-  var pdone = res.pbs.filter(function(p){ return p.done; });
-  var pn = pdone.length;
-  var ph;
+  var pdone = res.pbs.filter(function(p){ return p.done; }).sort(function(x, y){ return x.t - y.t; });
+  var pn = pdone.length, ph;
   if (!pn){
     ph = "<div class='mut'>No completed setups yet. Each needs 3 hours of data after the signal.</div>";
   } else {
-    var chaseAll = pdone.filter(function(p){ return p.chase !== null; }).map(function(p){ return p.chase - cost; });
+    var days = distinct(pdone, dayKey);
+    var chaseVals = pdone.filter(function(p){ return p.chase !== null; }).map(function(p){ return p.chase - cost; });
+    var per = pdone.map(function(p){ return (p.filled && p.wret !== null) ? p.wret - cost : 0; });
     var fills = pdone.filter(function(p){ return p.filled && p.wret !== null; });
     var stops = fills.filter(function(p){ return p.stopped; }).length;
-    var waitSum = fills.reduce(function(s, p){ return s + (p.wret - cost); }, 0);
-    var waitPer = waitSum / pn, chasePer = mean(chaseAll);
-    var verdictP = pn < 30 ? "<span class='warnc'>too few (n=" + pn + ", need 30+)</span>" : (waitPer > chasePer ? "<span class='up'>waiting did better here (not proof)</span>" : "<span class='dn'>waiting did not beat chasing</span>");
-    ph = "<table><tr><th>Setups</th><th>Chase: avg 3h result after cost</th><th>Wait: orders filled</th><th>Stopped out (of fills)</th><th>Wait: avg result per fill after cost</th><th>Wait: avg per setup (unfilled = 0)</th><th>Verdict</th></tr><tr><td>" + pn + "</td><td>" + pct(chasePer) + "</td><td>" + fills.length + " (" + (100 * fills.length / pn).toFixed(0) + "%)</td><td>" + (fills.length ? stops + " (" + (100 * stops / fills.length).toFixed(0) + "%)" : "n/a") + "</td><td>" + (fills.length ? pct(waitSum / fills.length) : "n/a") + "</td><td>" + pct(waitPer) + "</td><td>" + verdictP + "</td></tr></table>";
+    var waitPer = mean(per), chasePer = mean(chaseVals);
+    var ph1 = mean(per.slice(0, Math.floor(pn / 2))), ph2 = mean(per.slice(Math.floor(pn / 2)));
+    var fillAvg = fills.length ? mean(fills.map(function(p){ return p.wret - cost; })) : null;
+    var verdictP;
+    if (pn < 50 || days < 7) verdictP = "<span class='warnc'>too few (n=" + pn + ", days=" + days + "; need 50 and 7)</span>";
+    else if (waitPer > 0 && waitPer > chasePer && ph1 > 0 && ph2 > 0) verdictP = "<span class='up'>meets the bar (not proof)</span>";
+    else verdictP = "<span class='dn'>does not meet the bar</span>";
+    ph = "<table><tr><th>Completed setups</th><th>Distinct days</th><th>Chase: avg 3h result after cost</th><th>Wait: orders filled</th><th>Stopped out (of fills)</th><th>Wait: avg per fill after cost</th><th>Wait: avg per setup (unfilled = 0)</th><th>1st half per setup</th><th>2nd half per setup</th><th>Verdict</th></tr><tr><td>" + pn + "</td><td>" + days + "</td><td>" + pct(chasePer) + "</td><td>" + fills.length + " (" + (100 * fills.length / pn).toFixed(0) + "%)</td><td>" + (fills.length ? stops + " (" + (100 * stops / fills.length).toFixed(0) + "%)" : "n/a") + "</td><td>" + pct(fillAvg) + "</td><td>" + pct(waitPer) + "</td><td>" + pct(ph1) + "</td><td>" + pct(ph2) + "</td><td>" + verdictP + "</td></tr></table>";
   }
   document.getElementById("pbstats").innerHTML = ph;
 
