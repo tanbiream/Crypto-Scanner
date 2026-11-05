@@ -1,9 +1,9 @@
-/* Crypto Scanner shared rulebook, version v1.
+/* Crypto Scanner shared rulebook, version v1.1.1.
    Used by radar.html AND review.html so tests match what you see live.
    Changing any number here starts a NEW test period: commit it and use the new commit time as the rules start. */
 var Rules = (function () {
   var CFG = {
-    version: "v1.1.1"
+    version: "v1.1.1",
     minUsd24: 50000,
     watchMinUsd24: 250000,
     pullbackMinUsd24: 500000,
@@ -124,7 +124,7 @@ var Rules = (function () {
 
     // Pullback guide for coins that already moved
     var lv = null;
-        if ((warn !== "" || label === "Extended up" || label === "Extended down") && usd24 >= CFG.pullbackMinUsd24) {
+    if ((warn !== "" || label === "Extended up" || label === "Extended down") && usd24 >= CFG.pullbackMinUsd24) {
       var s3 = ub(o.ts, t - 10800), h3 = px, l3 = px;
       for (j = s3; j <= i; j++) { var v = o.px[j]; if (v > h3) h3 = v; if (v < l3) l3 = v; }
       var up = label === "Extended up" || (c60 !== null && c60 >= CFG.warnMove1h) ||
