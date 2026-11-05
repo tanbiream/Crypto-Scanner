@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trade Journal</title>
+<style>
+  body{background:#0d1117;color:#e6edf3;font-family:-apple-system,Helvetica,Arial,sans-serif;margin:0;padding:12px;font-size:13px}
+  h1{font-size:18px;margin:0 0 2px}
+  h2{font-size:15px;margin:20px 0 6px;color:#58a6ff}
+  .sub{color:#8b949e;font-size:12px;margin-bottom:10px;line-height:1.5}
+  .banner{background:#3d1417;color:#f85149;padding:10px;border-radius:8px;margin:10px 0;font-weight:600}
+  .note{background:#2a2410;color:#d29922;padding:9px;border-radius:8px;margin:10px 0}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+  label{display:block;color:#8b949e;font-size:12px;margin-bottom:3px}
+  input,select,textarea{width:100%;box-sizing:border-box;background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:8px;font-size:14px;font-family:inherit}
+  textarea{min-height:60px}
+  button{background:#21262d;color:#e6edf3;border:0;border-radius:8px;padding:8px 14px;font-size:14px;margin:6px 6px 0 0;cursor:pointer}
+  button.go{background:#238636;color:#fff}
+  button.small{padding:4px 9px;font-size:12px;margin:0 4px 0 0}
+  .wrap{overflow-x:auto;margin-top:6px}
+  table{border-collapse:collapse;min-width:100%}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #21262d;white-space:nowrap;vertical-align:top}
+  th{color:#8b949e;font-weight:600}
+  td.wrapcell{white-space:normal;min-width:180px;max-width:320px}
+  .up{color:#3fb950}.dn{color:#f85149}.mut{color:#8b949e}.warnc{color:#d29922}
+  .card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:12px;margin-top:8px}
+</style>
+</head>
+<body>
+<h1>Trade Journal</h1>
+<div class="sub">Log every trade or paper trade, close it with the result, and see what your own numbers say. Entries are saved in this browser only on this device: use Export now and then to keep a backup. Private windows and clearing site data erase them. Not financial advice.</div>
+<div id="banner"></div>
+
+<h2>Your limits (optional, set by you)</h2>
+<div class="card">
+  <div class="grid">
+    <div><label>Daily loss limit (USD)</label><input id="l_loss" type="number" step="any" placeholder="e.g. 20" onchange="saveLimits()"></div>
+    <div><label>Max leverage I allow myself</label><input id="l_lev" type="number" step="any" placeholder="e.g. 3" onchange="saveLimits()"></div>
+  </div>
+  <div class="mut" style="margin-top:6px">A red banner appears when today's closed trades lose your limit, and trades above your leverage limit are marked in the lists.</div>
+</div>
+
+<h2>Add a trade</h2>
+<div class="card">
+  <div class="grid">
+    <div><label>Time opened</label><input id="f_time" type="datetime-local"></div>
+    <div><label>Coin</label><input id="f_coin" placeholder="e.g. SOL"></div>
+    <div><label>Direction</label><select id="f_dir"><option value="long">Long</option><option value="short">Short</option></select></div>
+    <div><label>Paper or real</label><select id="f_type"><option>Paper</option><option>Real</option></select></div>
+    <div><label>Where the idea came from</label><select id="f_src"><option>Radar: Watch</option><option>Radar: Flagged</option><option>Radar: Pullback guide</option><option>Radar: All coins</option><option>Scoreboard</option><option>My own chart idea</option><option>Other</option></select></div>
+    <div><label>Entry price</label><input id="f_entry" type="number" step="any"></div>
+    <div><label>Stop price</label><input id="f_stop" type="number" step="any"></div>
+    <div><label>Position size (USD, full amount)</label><input id="f_size" type="number" step="any"></div>
+    <div><label>Leverage</label><input id="f_lev" type="number" step="any" value="1"></div>
+    <div><label>Was it a chase?</label><select id="f_chase"><option value="no">No, fresh setup</option><option value="yes">Yes, it had already moved</option><option value="unsure">Not sure</option></select></div>
+  </div>
+  <div style="margin-top:8px"><label>Why this trade? What did the scanner and chart show?</label><textarea id="f_reason"></textarea></div>
+  <button class="go" onclick="addTrade()">Save trade</button>
+</div>
+
+<h2>Open trades</h2>
+<div class="wrap" id="open"></div>
+
+<h2>Your numbers (closed trades)</h2>
+<div id="stats"></div>
+
+<h2>Closed trades (newest first)</h2>
+<div class="wrap" id="closed"></div>
+
+<h2>Backup</h2>
+<div class="card">
+  <button onclick="exportCsv()">Export CSV</button>
+  <button onclick="exportJson()">Export backup (JSON)</button>
+  <label style="margin-top:10px">Import a backup (JSON)</label>
+  <input type="file" id="imp" accept=".json,application/json" onchange="importJson(this)">
+</div>
+
+<script>
+var KEY = "tj_trades_v1", LKEY = "tj_limits_v1";
+var trades = [], limits = { loss: "", lev: "" };
+
+function lsGet(k, d){ try{ var v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch(e){ return d; } }
+function lsSet(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); return true; } catch(e){ return false; } }
+function esc(s){ return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); }
+function num(v){ var x = parseFloat(v); return isNaN(x) ? null : x; }
+function money(v){ if (v === null || v === undefined) return "n/a"; return (v < 0 ? "-" : "") + "$" + Math.abs(v).toFixed(2); }
+function mc(v){ return v > 0 ? "up" : v < 0 ? "dn" : "mut"; }
+function fmtT(iso){ return iso ? new Date(iso).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"}) : ""; }
+function nowLocal(){ var d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); }
+function pnl(t){ if (t.exit === null || t.exit === undefined) return null; var d = t.dir === "long" ? 1 : -1; return d * (t.exit / t.entry - 1) * t.size - (t.fees || 0); }
+function riskUsd(t){ return (t.stop !== null && t.stop !== undefined) ? Math.abs(t.entry - t.stop) / t.entry * t.size : null; }
+function rMult(t){ var p = pnl(t), r = riskUsd(t); return (p !== null && r) ? p / r : null; }
+function levFlag(t){ var m = num(limits.lev); return (m !== null && t.lev > m) ? " <span class='dn'>(over your limit)</span>" : ""; }
+function chaseTxt(c){ return c === "yes" ? "<span class='warnc'>chase</span>" : c === "no" ? "no" : "unsure"; }
+
+function load(){ trades = lsGet(KEY, []); limits = lsGet(LKEY, { loss: "", lev: "" }); }
+function save(){ if (!lsSet(KEY, trades)) alert("Could not save in this browser (storage blocked). Export a backup."); }
+function saveLimits(){ limits.loss = document.getElementById("l_loss").value; limits.lev = document.getElementById("l_lev").value; lsSet(LKEY, limits); render(); }
+
+function addTrade(){
+  var coin = document.getElementById("f_coin").value.trim().toUpperCase();
+  var entry = num(document.getElementById("f_entry").value), stop = num(document.getElementById("f_stop").value);
+  var size = num(document.getElementById("f_size").value), lev = num(document.getElementById("f_lev").value) || 1;
+  var dir = document.getElementById("f_dir").value;
+  if (!coin){ alert("Enter the coin."); return; }
+  if (!(entry > 0)){ alert("Enter a valid entry price."); return; }
+  if (!(size > 0)){ alert("Enter the position size in USD."); return; }
+  if (stop !== null && ((dir === "long" && stop >= entry) || (dir === "short" && stop <= entry))){
+    if (!confirm("Your stop is on the wrong side of your entry for a " + dir + ". Save anyway?")) return;
+  }
+  if (stop === null && !confirm("No stop price entered. Save without one?")) return;
+  var tv = document.getElementById("f_time").value;
+  trades.push({
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    opened: tv ? new Date(tv).toISOString() : new Date().toISOString(),
+    coin: coin, dir: dir, type: document.getElementById("f_type").value, src: document.getElementById("f_src").value,
+    entry: entry, stop: stop, size: size, lev: lev, chase: document.getElementById("f_chase").value,
+    reason: document.getElementById("f_reason").value.trim(), exit: null, fees: 0, lesson: "", closed: null
+  });
+  save();
+  document.getElementById("f_coin").value = ""; document.getElementById("f_entry").value = ""; document.getElementById("f_stop").value = "";
+  document.getElementById("f_size").value = ""; document.getElementById("f_reason").value = ""; document.getElementById("f_time").value = nowLocal();
+  render();
+}
+function find(id){ for (var i = 0; i < trades.length; i++) if (trades[i].id === id) return trades[i]; return null; }
+function closeTrade(id){
+  var t = find(id); if (!t) return;
+  var ex = prompt("Exit price for " + t.coin + "?"); if (ex === null) return;
+  var e = num(ex); if (!(e > 0)){ alert("Enter a valid exit price."); return; }
+  var f = prompt("Total fees paid on this trade in USD (entry plus exit; enter 0 if unknown):", "0"); if (f === null) return;
+  var l = prompt("What happened, and what would you do differently? (optional)", "");
+  t.exit = e; t.fees = num(f) || 0; t.lesson = l || ""; t.closed = new Date().toISOString();
+  save(); render();
+}
+function delTrade(id){ if (!confirm("Delete this entry permanently?")) return; trades = trades.filter(function(t){ return t.id !== id; }); save(); render(); }
+
+function group(list, keyFn){
+  var g = {};
+  list.forEach(function(t){ var k = keyFn(t); (g[k] = g[k] || []).push(t); });
+  return g;
+}
+function statRow(label, list){
+  var n = list.length, p = list.map(pnl), wins = p.filter(function(x){ return x > 0; }), losses = p.filter(function(x){ return x < 0; });
+  var total = p.reduce(function(s, x){ return s + x; }, 0), fees = list.reduce(function(s, t){ return s + (t.fees || 0); }, 0);
+  var sw = wins.reduce(function(s, x){ return s + x; }, 0), sl = Math.abs(losses.reduce(function(s, x){ return s + x; }, 0));
+  var rs = list.map(rMult).filter(function(x){ return x !== null; });
+  var avgR = rs.length ? rs.reduce(function(s, x){ return s + x; }, 0) / rs.length : null;
+  return "<tr><td>" + esc(label) + "</td><td>" + n + "</td><td>" + (100 * wins.length / n).toFixed(0) + "%</td><td class='" + mc(total) + "'>" + money(total) + "</td><td>" + (wins.length ? money(sw / wins.length) : "n/a") + "</td><td>" + (losses.length ? "-" + money(sl / losses.length) : "n/a") + "</td><td>" + (sl > 0 ? (sw / sl).toFixed(2) : (sw > 0 ? "no losses" : "n/a")) + "</td><td>" + (avgR === null ? "n/a" : avgR.toFixed(2)) + "</td><td>" + money(fees) + "</td><td class='dn'>" + money(Math.min.apply(null, p)) + "</td></tr>";
+}
+function statTable(title, groups){
+  var h = "<div class='wrap'><table><tr><th>" + title + "</th><th>Trades</th><th>Win rate</th><th>Net P&L</th><th>Avg win</th><th>Avg loss</th><th>Profit factor</th><th>Avg R</th><th>Fees</th><th>Worst trade</th></tr>";
+  Object.keys(groups).sort().forEach(function(k){ h += statRow(k, groups[k]); });
+  return h + "</table></div>";
+}
+
+function render(){
+  document.getElementById("l_loss").value = limits.loss; document.getElementById("l_lev").value = limits.lev;
+  var closed = trades.filter(function(t){ return t.exit !== null && t.exit !== undefined; }).sort(function(a, b){ return (b.closed || "").localeCompare(a.closed || ""); });
+  var open = trades.filter(function(t){ return t.exit === null || t.exit === undefined; }).sort(function(a, b){ return b.opened.localeCompare(a.opened); });
+
+  var today = new Date().toDateString(), tn = 0;
+  closed.forEach(function(t){ if (t.closed && new Date(t.closed).toDateString() === today) tn += pnl(t); });
+  var lim = num(limits.loss), b = "";
+  if (lim !== null && lim > 0 && tn <= -lim) b = "<div class='banner'>Daily loss limit reached (" + money(tn) + " today, limit " + money(-lim) + "). You set this rule: stop for today.</div>";
+  else if (closed.length) b = "<div class='note'>Closed today: " + money(tn) + "</div>";
+  document.getElementById("banner").innerHTML = b;
+
+  var h = "<table><tr><th>Opened</th><th>Coin</th><th>Direction</th><th>Type</th><th>Source</th><th>Entry</th><th>Stop</th><th>Size (USD)</th><th>Leverage</th><th>Chase?</th><th>Why</th><th></th></tr>";
+  open.forEach(function(t){
+    h += "<tr><td>" + fmtT(t.opened) + "</td><td>" + esc(t.coin) + "</td><td class='" + (t.dir === "long" ? "up" : "dn") + "'>" + t.dir + "</td><td>" + t.type + "</td><td>" + esc(t.src) + "</td><td>" + t.entry + "</td><td>" + (t.stop === null ? "<span class='dn'>none</span>" : t.stop) + "</td><td>" + t.size + "</td><td>" + t.lev + "x" + levFlag(t) + "</td><td>" + chaseTxt(t.chase) + "</td><td class='wrapcell mut'>" + esc(t.reason) + "</td><td><button class='small go' onclick=\"closeTrade('" + t.id + "')\">Close</button><button class='small' onclick=\"delTrade('" + t.id + "')\">Delete</button></td></tr>";
+  });
+  if (!open.length) h += "<tr><td colspan='12' class='mut'>No open trades.</td></tr>";
+  document.getElementById("open").innerHTML = h + "</table>";
+
+  var s = "";
+  if (!closed.length) s = "<div class='mut'>Close a trade to see your numbers. After 20 or more trades, patterns in your own results usually appear.</div>";
+  else {
+    s += statTable("All closed trades", { "All": closed });
+    s += statTable("Paper or real", group(closed, function(t){ return t.type; }));
+    s += statTable("Where the idea came from", group(closed, function(t){ return t.src; }));
+    s += statTable("Was it a chase?", group(closed, function(t){ return t.chase === "yes" ? "Chase" : t.chase === "no" ? "Fresh setup" : "Unsure"; }));
+    s += statTable("Leverage", group(closed, function(t){ return t.lev <= 1 ? "1x" : t.lev <= 3 ? "up to 3x" : t.lev <= 10 ? "up to 10x" : "over 10x"; }));
+    if (closed.length < 20) s += "<div class='note'>Fewer than 20 closed trades: these numbers are mostly luck. Keep logging.</div>";
+  }
+  document.getElementById("stats").innerHTML = s;
+
+  var c = "<table><tr><th>Opened</th><th>Closed</th><th>Coin</th><th>Direction</th><th>Type</th><th>Source</th><th>Entry</th><th>Exit</th><th>Size</th><th>Leverage</th><th>Net P&L</th><th>R</th><th>Chase?</th><th>Why</th><th>Lesson</th><th></th></tr>";
+  closed.forEach(function(t){
+    var p = pnl(t), r = rMult(t);
+    c += "<tr><td>" + fmtT(t.opened) + "</td><td>" + fmtT(t.closed) + "</td><td>" + esc(t.coin) + "</td><td class='" + (t.dir === "long" ? "up" : "dn") + "'>" + t.dir + "</td><td>" + t.type + "</td><td>" + esc(t.src) + "</td><td>" + t.entry + "</td><td>" + t.exit + "</td><td>" + t.size + "</td><td>" + t.lev + "x" + levFlag(t) + "</td><td class='" + mc(p) + "'>" + money(p) + "</td><td>" + (r === null ? "n/a" : r.toFixed(2)) + "</td><td>" + chaseTxt(t.chase) + "</td><td class='wrapcell mut'>" + esc(t.reason) + "</td><td class='wrapcell'>" + esc(t.lesson) + "</td><td><button class='small' onclick=\"delTrade('" + t.id + "')\">Delete</button></td></tr>";
+  });
+  if (!closed.length) c += "<tr><td colspan='16' class='mut'>No closed trades yet.</td></tr>";
+  document.getElementById("closed").innerHTML = c + "</table>";
+}
+
+function download(name, text, type){
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type: type }));
+  a.download = name; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+}
+function exportJson(){ download("trade-journal-backup.json", JSON.stringify({ trades: trades, limits: limits }), "application/json"); }
+function exportCsv(){
+  var cols = ["opened", "closed", "coin", "dir", "type", "src", "entry", "stop", "exit", "size", "lev", "fees", "chase", "reason", "lesson"];
+  var lines = [cols.join(",")];
+  trades.forEach(function(t){ lines.push(cols.map(function(k){ var v = t[k] === null || t[k] === undefined ? "" : String(t[k]); return '"' + v.replace(/"/g, '""') + '"'; }).join(",")); });
+  download("trade-journal.csv", lines.join("\n"), "text/csv");
+}
+function importJson(inp){
+  var f = inp.files[0]; if (!f) return;
+  var r = new FileReader();
+  r.onload = function(){
+    try{
+      var d = JSON.parse(r.result), ids = {};
+      trades.forEach(function(t){ ids[t.id] = 1; });
+      var added = 0;
+      (d.trades || []).forEach(function(t){ if (t && t.id && !ids[t.id]){ trades.push(t); added++; } });
+      if (d.limits && !limits.loss && !limits.lev) limits = d.limits;
+      save(); lsSet(LKEY, limits); render(); alert("Imported " + added + " new trades.");
+    } catch(e){ alert("That file could not be read."); }
+    inp.value = "";
+  };
+  r.readAsText(f);
+}
+
+load();
+document.getElementById("f_time").value = nowLocal();
+render();
+</script>
+</body>
+</html>
