@@ -137,7 +137,7 @@ async function run(){
   if (mode === "since"){
     if (!startT){ setStatus("bad", "Set a Rules start time first."); return; }
     from = startT - 7200;
-    var maxBack = nowSec - 14 * 86400;
+        var maxBack = nowSec - 45 * 86400;
     if (from < maxBack){ from = maxBack; note = " Only the last 14 days were loaded, so the start was clipped."; }
   } else {
     from = nowSec - parseInt(mode, 10) * 3600;
