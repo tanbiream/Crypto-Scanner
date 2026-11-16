@@ -1,6 +1,6 @@
 # Crypto Futures Intelligence Scanner (analysis only)
 
-Last updated: Nov 12, 2026. Keep this file current whenever a rule version, file, or schedule changes.
+Last updated: Nov 16, 2026. Keep this file current whenever a rule version, file, or schedule changes.
 
 ## What this project is
 
@@ -11,12 +11,12 @@ A free, self-built market scanner for a New York based, non-programmer trader. I
 - **Analysis only.** Never place trades, never ask for exchange API keys, passwords or withdrawal/trading permissions, never run anything that moves money.
 - **Never fabricate data.** Always name the source (Bitnomial or Kraken), show LIVE or STALE, and stop showing signals when data is stale or unavailable.
 - **Bybit is restricted for US users.** Do not use Bybit data and do not suggest VPNs or workarounds. The user trades on Bybit and views TradingView charts. Our prices differ slightly from Bybit (about 0.2% on Bitcoin), so levels must be checked against the user's own chart.
-- **Be honest about results.** So far no signal beats costs. Do not oversell, do not call anything profitable without a passed test, and say plainly when a sample is too small.
+- **Be honest about results.** As of Nov 16, no signal beats costs, and one early finding ("chasing pumped coins loses about 8%") did not hold up with more data. Small samples mislead: say plainly when a sample is too small, and do not oversell or call anything profitable without a passed test.
 - **Frozen rules.** `rules.js` (radar, version v1.1.1) and `futrules.js` (scoreboard, version f2) are frozen. Do not change any number without a new version label and a new test start time. Tune nothing based on results already seen.
 - **Fix design flaws, not results.** A change is allowed only if it fixes a clear bug or design flaw, gets a new version label, is committed, and its commit time becomes the new test start.
 - **How to work with the user.** Plain simple language, one step at a time, wait for them to finish each step, give complete code and say exactly where it goes. Free tools preferred, but the user has said they do not mind paying for the Cloudflare $5/month plan when storage requires it (tell them when). They now work mostly from a Windows laptop, and sometimes an iPhone.
-- **Edit safely.** Give whole-file replacements, not one-line edits. A hand edit once deleted a setting (watchMinUsd24) and silently turned the Watch tier off for three days.
-- **Context for the user:** they have day traded for years without success, tend to chase pumped coins, and use too much leverage and size. The scanner's tested value so far is the "do not chase" warning. Encourage paper trading first, small size, low or no leverage, and a trade journal. Do not give financial advice or tell them what to trade.
+- **Edit safely.** Give whole-file replacements, not one-line edits (the one exception is a single clearly marked number change). A hand edit once deleted a setting (watchMinUsd24) and silently turned the Watch tier off for three days.
+- **Context for the user:** they have day traded for years without success, tend to chase pumped coins, and use too much leverage and size. Avoiding chasing is still a sensible risk rule, but the tests have not shown that it improves results. Encourage paper trading first, small size, low or no leverage, and a trade journal. Do not give financial advice or tell them what to trade.
 
 ## Architecture (all free so far)
 
@@ -30,8 +30,8 @@ A free, self-built market scanner for a New York based, non-programmer trader. I
 
 | Database | Worker binding | Holds | Notes |
 | --- | --- | --- | --- |
-| scanner-db | `DB` | `snapshots` (futures, kept 60 days) and old `radar` rows (Nov 2 to about Nov 8) | About 371 MB of 500 MB on Nov 12 |
-| scanner-db2 | `DB2` | `radar` rows from Nov 12 on, liquid coins only (24h volume of $40K or more) | About 19 MB per day |
+| scanner-db | `DB` | `snapshots` (futures, kept 60 days) and old `radar` rows (Nov 2 to about Nov 8) | 393 MB of 500 MB (79%) on Nov 16, growing about 5.9 MB per day |
+| scanner-db2 | `DB2` | `radar` rows from Nov 12 on, liquid coins only (24h volume of $40K or more) | 67 MB on Nov 16, growing about 18 MB per day |
 
 Free Cloudflare limits: 500 MB per database, 10 databases and 5 GB per account, 100K rows written per day, 10 ms CPU per Worker run. Paid ($5/month) raises each database to 10 GB. `/db/size` and `health.html` show usage (yellow at 80%, red at 92%).
 
@@ -66,16 +66,20 @@ Data formats:
 
 ## Testing plan and pass/fail bars (written in advance)
 
-- Checkpoint Mon Nov 16 (quick look only), **first real read Mon Nov 23**, second read about Dec 7. Moved from Nov 16 / Nov 30 after the Nov 8 to 12 recorder outage (database full, about 3.5 days of data lost).
+- Checkpoint Mon Nov 16 (done), **first real read Mon Nov 23**, second read about Dec 7. Moved from Nov 16 / Nov 30 after the Nov 8 to 12 recorder outage (database full, about 3.5 days of data lost).
 - Do not re-run reviews and read results between scheduled reads.
 - **Watch** (each direction): 50 or more completed entries over 20 or more distinct hours; hit rate at least 1.5x random coins; average move in the direction after 1.0% cost above zero and above the random-coin average; above zero in both halves.
 - **Pullback:** 50 or more completed setups over 7 or more days; waiting beats chasing and is above zero per setup after cost; above zero in both halves.
 - **Score leans:** 1-hour hold, 0.5% cost, 50 or more events over 20 or more hours, above zero after cost, beats baseline, above zero in both halves. Market-wide leans are shown separately from the rest.
 - Meeting a bar is still not proof. The earliest point to consider tiny real-size trading is mid December, and only if tests pass.
 
-## Results so far (Nov 5, three days after freeze, not final)
+## Results so far (Nov 16 checkpoint, two weeks after the freeze, 1.0% cost for radar, 0.5% for scores)
 
-Watch finds volatile coins, not direction. Chasing pumped coins lost about 7.9% after cost on average (44 setups), waiting for the pullback zone lost about 3.1% per setup, no main flag was positive after a 1.0% cost.
+No signal meets its bar, with large samples (hundreds of events over 160 or more distinct hours):
+- Watch finds volatile coins, not direction. Up: 6.8% hit a 5% move versus 4.9% for random coins, average -0.17% versus -0.16%, -1.17% after cost. Down: 9.6% versus 5.7%, +0.10% versus +0.16%, -0.90% after cost.
+- Pullback (193 setups, 11 days): chasing averaged -0.17% after cost, waiting for the zone -1.64% per setup. The earlier "chasing loses about 8%" result (44 setups) did not hold up.
+- Main flags at 1 hour after cost: breakouts -1.49%, potential pump -1.05%, breakdown -0.90%, potential dump -0.68%. Breakout flags averaged -0.49% before cost, so they tended to reverse.
+- Score leans (about 2,300): LONG -0.58%, SHORT -0.45% after cost, neither better than random coins. The market was balanced, not one-directional.
 
 ## Known pitfalls
 
@@ -83,7 +87,8 @@ Watch finds volatile coins, not direction. Chasing pumped coins lost about 7.9% 
 - Browsers cache pages. Add `?v=2` to the address or press Ctrl+Shift+R.
 - "Rules is not defined" means `rules.js` is missing or has a syntax error.
 - Both recorders going red together means a shared cause (schedule, Cloudflare, or the database size limit). Check the Worker's Observability logs.
-- Storage plan: radar writes go to `DB2`, so `DB` now holds futures plus the old radar archive. `DB` fills around Dec 5 and `DB2` around Dec 8 at current rates. Free space (for example delete the old radar archive after the second test read), rotate to a new database, or upgrade before either reaches about 450 MB.
+- Storage plan: radar writes go to `DB2`, so `DB` holds futures plus the old radar archive (needed until the second read). `DB` was at 79% on Nov 16 and fills around Dec 4; `DB2` fills around Dec 10. Upgrade to Workers Paid, rotate to a new database, or free space before either reaches about 450 MB (planned: upgrade by about Nov 24).
+- `review.html` loads at most 14 days of radar history until the cap is raised to 45 days (Step 49, Nov 16). Without that change the Nov 2 test start gets silently clipped after about Nov 17.
 
 ## Not built yet (wait for test results)
 
