@@ -1,6 +1,6 @@
 # Crypto Futures Intelligence Scanner (analysis only)
 
-Last updated: Nov 16, 2026. Keep this file current whenever a rule version, file, or schedule changes.
+Last updated: Nov 18, 2026. Keep this file current whenever a rule version, file, or schedule changes.
 
 ## What this project is
 
@@ -30,10 +30,10 @@ A free, self-built market scanner for a New York based, non-programmer trader. I
 
 | Database | Worker binding | Holds | Notes |
 | --- | --- | --- | --- |
-| scanner-db | `DB` | `snapshots` (futures, kept 60 days) and old `radar` rows (Nov 2 to about Nov 8) | 393 MB of 500 MB (79%) on Nov 16, growing about 5.9 MB per day |
+| scanner-db | `DB` | `snapshots` (futures, kept 60 days) and old `radar` rows (Nov 2 to about Nov 8) | 393 MB on Nov 16, growing about 5.9 MB per day |
 | scanner-db2 | `DB2` | `radar` rows from Nov 12 on, liquid coins only (24h volume of $40K or more) | 67 MB on Nov 16, growing about 18 MB per day |
 
-Free Cloudflare limits: 500 MB per database, 10 databases and 5 GB per account, 100K rows written per day, 10 ms CPU per Worker run. Paid ($5/month) raises each database to 10 GB. `/db/size` and `health.html` show usage (yellow at 80%, red at 92%).
+Plan: Workers Paid ($5/month) since Nov 18, 2026, so each database can grow to 10 GB (the free limits were 500 MB per database, 5 GB per account, 100K rows written per day, 10 ms CPU per Worker run). If the plan is ever cancelled the 500 MB limit returns, and a database already larger than that stops accepting writes until space is freed. `/db/size` and `health.html` show usage against 10 GB (yellow at 80%, red at 92%); the Worker's `limit_bytes` is 10000000000.
 
 Data formats:
 - Futures row: `[product_id, mark_price, last_price, last_price_time, volume, open_interest, funding_rate]`. Mark price, volume, open interest, funding update only at daily settlement. Last price and last-trade time are live.
@@ -87,7 +87,7 @@ No signal meets its bar, with large samples (hundreds of events over 160 or more
 - Browsers cache pages. Add `?v=2` to the address or press Ctrl+Shift+R.
 - "Rules is not defined" means `rules.js` is missing or has a syntax error.
 - Both recorders going red together means a shared cause (schedule, Cloudflare, or the database size limit). Check the Worker's Observability logs.
-- Storage plan: radar writes go to `DB2`, so `DB` holds futures plus the old radar archive (needed until the second read). `DB` was at 79% on Nov 16 and fills around Dec 4; `DB2` fills around Dec 10. Upgrade to Workers Paid, rotate to a new database, or free space before either reaches about 450 MB (planned: upgrade by about Nov 24).
+- Storage: upgraded to Workers Paid on Nov 18 (10 GB per database) and the Worker's `limit_bytes` was set to 10000000000, so storage is no longer a near-term constraint. Radar writes go to `DB2`; `DB` holds futures plus the old radar archive (needed until the second read). Re-check `/db/size` and the health page if a recorder ever stops.
 - `review.html` loads at most 14 days of radar history until the cap is raised to 45 days (Step 49, Nov 16). Without that change the Nov 2 test start gets silently clipped after about Nov 17.
 
 ## Not built yet (wait for test results)
