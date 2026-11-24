@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Daily Swing Test</title>
+<style>
+  body{background:#0d1117;color:#e6edf3;font-family:-apple-system,Helvetica,Arial,sans-serif;margin:0;padding:12px;font-size:13px}
+  h1{font-size:18px;margin:0 0 2px}
+  h2{font-size:15px;margin:18px 0 4px;color:#58a6ff}
+  .sub{color:#8b949e;font-size:12px;margin-bottom:10px;line-height:1.5}
+  .bar{padding:9px;border-radius:8px;margin:10px 0}
+  .ok{background:#12351f;color:#3fb950}
+  .bad{background:#3d1417;color:#f85149}
+  .wait{background:#2a2410;color:#d29922}
+  .rule{background:#161b22;border-left:3px solid #58a6ff;padding:8px 10px;margin:10px 0;line-height:1.6}
+  .ctl label{margin-right:12px;color:#8b949e;display:inline-block;margin-bottom:6px}
+  input{background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:8px;font-size:14px;width:70px}
+  button{background:#21262d;color:#e6edf3;border:0;border-radius:8px;padding:8px 14px;font-size:14px;margin:0 6px 6px 0;cursor:pointer}
+  button.run{background:#238636}
+  button.hold{background:#9e6a03}
+  .wrap{overflow-x:auto;margin-top:8px}
+  table{border-collapse:collapse;min-width:100%}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid #21262d;white-space:nowrap}
+  th{color:#8b949e;font-weight:600}
+  .up{color:#3fb950}.dn{color:#f85149}.mut{color:#8b949e}.warnc{color:#d29922}
+  .warn{color:#8b949e;font-size:11px;margin-top:14px;line-height:1.6}
+  pre{background:#161b22;padding:8px;border-radius:6px;white-space:pre-wrap;margin:6px 0}
+  details{margin-top:8px}
+  summary{cursor:pointer;color:#58a6ff}
+</style>
+</head>
+<body>
+<h1>Daily Swing Test (Kraken spot, long-only)</h1>
+<div class="sub">Version <span id="ver"></span>. Replays three fixed rules on about two years of Kraken daily candles. Analysis only, no trading.</div>
+<div class="rule"><b>Pre-registered rules and bar, written before any results (Nov 24, 2026):</b><br>
+<b>Universe:</b> Kraken USD spot pairs (stablecoins and fiat excluded) with a 20-day average daily volume of at least $300K on the signal day. Long-only. Entry at the next day's open, exit at an open. Round-trip cost 1.0% (primary).<br>
+<b>Rule 1, breakout:</b> buy after a close above the prior 20-day high. Exit after a close below the prior 10-day low, or after 60 days.<br>
+<b>Rule 2, weekly momentum:</b> every Sunday close, buy the 5 coins with the best 28-day return (only if positive). Hold 7 days.<br>
+<b>Rule 3, oversold bounce:</b> buy after a drop of 20% or more over 5 days. Hold 5 days.<br>
+<b>Split:</b> before 2026-01-01 is training (for checking the code, run first). From 2026-01-01 is the holdout, run once per version after the rules are final.<br>
+<b>A rule meets the bar on the holdout only if ALL hold:</b> (1) at least 100 completed trades over at least 8 distinct months; (2) average after cost above zero and at least 0.5 percentage points above the random baseline (all liquid coin-days, same holding time); (3) average after cost still above zero after removing the best 5% of trades; (4) average after cost above zero in BOTH halves; (5) at least 60% of months with 5 or more trades have a positive average. Meeting the bar is not proof of a profitable strategy. Any change to a rule after seeing training results becomes a new version (d2) and is logged.</div>
+<div class="ctl">
+  <label>Round-trip cost % <input id="cost" type="number" step="0.1" value="1.0"></label>
+  <button class="run" onclick="loadData(false)">Load data</button>
+  <button onclick="loadData(true)">Reload from Kraken</button>
+  <button class="run" onclick="runTest('train')">Run training period</button>
+  <button class="hold" onclick="runTest('hold')">Run holdout (once)</button>
+</div>
+<div class="bar wait" id="status">Press "Load data". The first load takes about 5 minutes (one request per coin, paced for Kraken's limits). It is then saved in this browser for 12 hours.</div>
+<pre id="summary"></pre>
+<div id="results"></div>
+<h2>Holdout run log (this browser)</h2>
+<pre id="log">No holdout runs yet.</pre>
+<div class="warn">Known biases: only coins listed on Kraken today are included, so coins that were delisted or collapsed are missing (this flatters every rule, especially the oversold bounce). Fills are assumed exactly at the open price, which is optimistic; the 1.0% cost is meant to cover fees and slippage but thin coins can cost more. Trades unfinished at the end of the data are excluded. Trades from different coins on the same day are correlated, so the monthly checks matter more than the trade count. Daily candles start at 00:00 UTC. A baseline is the average gross return of every liquid coin-day with the same holding time in the same period. Nothing here is financial advice.</div>
+<script>
+var BASE = "https://scanner-relay.tanbir-eam-6ff.workers.dev";
+var VERSION = "d1", SPLIT = 1767225600;
+var CFG = { liqUsd: 300000, donEntry: 20, donExit: 10, maxHold: 60, momLook: 28, momTop: 5, momHold: 7, dropLook: 5, dropPct: -20, dropHold: 5, minTrades: 100, minMonths: 8, minEdgePP: 0.5, trimPct: 0.05, monthMinTrades: 5, monthPosShare: 0.6 };
+var SKIP = /^(EUR|GBP|AUD|CAD|CHF|JPY|USDT|USDC|DAI|PYUSD|USD1|TUSD|RLUSD|USDG|FDUSD|EURT|EURQ|EURC)USD$/;
+var coins = null, names = [];
+document.getElementById("ver").textContent = VERSION;
+
+function setStatus(cls, t){ var s = document.getElementById("status"); s.className = "bar " + cls; s.textContent = t; }
+function sleep(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
+function mean(a){ if (!a.length) return null; var s = 0; for (var i = 0; i < a.length; i++) s += a[i]; return s / a.length; }
+function pct(v, d){ if (v === null || v === undefined || isNaN(v)) return "<span class='mut'>n/a</span>"; return "<span class='" + (v >= 0 ? "up" : "dn") + "'>" + (v >= 0 ? "+" : "") + v.toFixed(d === undefined ? 2 : d) + "%</span>"; }
+function ym(ts){ return new Date(ts * 1000).toISOString().slice(0, 7); }
+function ymd(ts){ return new Date(ts * 1000).toISOString().slice(0, 10); }
+function lsGet(){ try{ return JSON.parse(localStorage.getItem("daily_holdout_log") || "[]"); } catch(e){ return []; } }
+function lsSet(v){ try{ localStorage.setItem("daily_holdout_log", JSON.stringify(v)); } catch(e){} }
+
+function idb(){ return new Promise(function(res, rej){ var q = indexedDB.open("scanner_daily", 1); q.onupgradeneeded = function(){ q.result.createObjectStore("kv"); }; q.onsuccess = function(){ res(q.result); }; q.onerror = function(){ rej(q.error); }; }); }
+async function idbGet(k){ try{ var db = await idb(); return await new Promise(function(res, rej){ var t = db.transaction("kv").objectStore("kv").get(k); t.onsuccess = function(){ res(t.result); }; t.onerror = function(){ rej(t.error); }; }); } catch(e){ return null; } }
+async function idbSet(k, v){ try{ var db = await idb(); await new Promise(function(res, rej){ var t = db.transaction("kv", "readwrite").objectStore("kv").put(v, k); t.onsuccess = function(){ res(); }; t.onerror = function(){ rej(t.error); }; }); } catch(e){} }
+
+async function getJson(path){
+  for (var a = 0; a < 4; a++){
+    try{
+      var r = await fetch(BASE + path);
+      var j = await r.json();
+      if (j.error && j.error.length){
+        var msg = j.error.join(", ");
+        if (/too many|rate|limit/i.test(msg)){ await sleep(4000 * (a + 1)); continue; }
+        throw new Error(msg);
+      }
+      return j;
+    } catch(e){ if (a === 3) throw e; await sleep(2000); }
+  }
+}
+
+function finalizeCoins(){
+  names = Object.keys(coins);
+  names.forEach(function(nm){
+    var d = coins[nm], n = d.t.length;
+    d.idx = {}; d.av20 = new Array(n).fill(0);
+    for (var i = 0; i < n; i++){
+      d.idx[d.t[i]] = i;
+      if (i >= 19){ var s = 0; for (var k = i - 19; k <= i; k++) s += d.v[k]; d.av20[i] = s / 20; }
+    }
+  });
+}
+
+async function loadData(force){
+  try{
+    if (!force){
+      var cached = await idbGet("coins_v1");
+      if (cached && cached.fetched && (Date.now() - cached.fetched) < 12 * 3600 * 1000){
+        coins = cached.coins; finalizeCoins();
+        setStatus("ok", "Loaded " + names.length + " coins from this browser's saved copy (fetched " + new Date(cached.fetched).toLocaleString() + ").");
+        return;
+      }
+    }
+    setStatus("wait", "Listing Kraken USD pairs...");
+    var ap = await getJson("/kraken/AssetPairs");
+    var pairs = [];
+    Object.keys(ap.result).forEach(function(k){
+      var p = ap.result[k];
+      if (k.indexOf(".d") >= 0) return;
+      if (p.quote !== "ZUSD" && p.quote !== "USD") return;
+      if (p.status && p.status !== "online") return;
+      var alt = p.altname || k;
+      if (SKIP.test(alt)) return;
+      pairs.push(alt);
+    });
+    pairs = pairs.filter(function(v, i){ return pairs.indexOf(v) === i; });
+    var out = {}, failed = [];
+    for (var i = 0; i < pairs.length; i++){
+      setStatus("wait", "Loading daily candles: " + (i + 1) + " of " + pairs.length + " (" + pairs[i] + ")...");
+      try{
+        var j = await getJson("/kraken/OHLC?pair=" + encodeURIComponent(pairs[i]) + "&interval=1440");
+        var key = Object.keys(j.result).filter(function(k){ return k !== "last"; })[0];
+        var arr = j.result[key].slice(0, -1);
+        if (arr.length >= 80){
+          var d = { t: [], o: [], h: [], l: [], c: [], v: [] };
+          arr.forEach(function(c){
+            d.t.push(c[0]); d.o.push(parseFloat(c[1])); d.h.push(parseFloat(c[2])); d.l.push(parseFloat(c[3])); d.c.push(parseFloat(c[4]));
+            d.v.push(parseFloat(c[5]) * parseFloat(c[6]));
+          });
+          out[pairs[i].replace(/USD$/, "")] = d;
+        }
+      } catch(e){ failed.push(pairs[i]); }
+      await sleep(1200);
+    }
+    coins = out; finalizeCoins();
+    await idbSet("coins_v1", { fetched: Date.now(), coins: out });
+    setStatus(failed.length > pairs.length / 4 ? "bad" : "ok", "Loaded " + names.length + " coins (" + failed.length + " pairs failed or were too short)." + (failed.length > pairs.length / 4 ? " Many failed: try Reload again in a few minutes." : ""));
+  } catch(e){
+    setStatus("bad", "FAILED: " + e.message);
+  }
+}
+
+function liquid(d, i){ return i >= 19 && d.av20[i] >= CFG.liqUsd; }
+function maxHigh(d, a, b){ var m = -Infinity; for (var k = a; k <= b; k++) if (d.h[k] > m) m = d.h[k]; return m; }
+function minLow(d, a, b){ var m = Infinity; for (var k = a; k <= b; k++) if (d.l[k] < m) m = d.l[k]; return m; }
+function endIndex(d, mode){ if (mode === "train"){ var k = 0; while (k < d.t.length && d.t[k] < SPLIT) k++; return k; } return d.t.length; }
+function startIndex(d, mode){ if (mode === "train") return 0; var k = 0; while (k < d.t.length && d.t[k] < SPLIT) k++; return k; }
+
+function stratDonchian(d, name, mode){
+  var end = endIndex(d, mode), hi = end, trades = [], i = Math.max(startIndex(d, mode), CFG.donEntry);
+  while (i < hi){
+    if (liquid(d, i) && d.c[i] > maxHigh(d, i - CFG.donEntry, i - 1)){
+      var e = i + 1; if (e >= end) break;
+      var x = -1;
+      for (var j = e; j < end; j++){
+        if (j - e >= CFG.maxHold){ x = j; break; }
+        if (j > e && d.c[j] < minLow(d, j - CFG.donExit, j - 1)){ x = j + 1; break; }
+      }
+      if (x < 0 || x >= end) break;
+      trades.push({ coin: name, te: d.t[e], gross: (d.o[x] / d.o[e] - 1) * 100, hold: x - e });
+      i = x;
+    } else i++;
+  }
+  return trades;
+}
+
+function stratBounce(d, name, mode){
+  var end = endIndex(d, mode), hi = end, trades = [], i = Math.max(startIndex(d, mode), CFG.dropLook);
+  while (i < hi){
+    if (liquid(d, i) && (d.c[i] / d.c[i - CFG.dropLook] - 1) * 100 <= CFG.dropPct){
+      var e = i + 1, x = e + CFG.dropHold; if (x >= end) break;
+      trades.push({ coin: name, te: d.t[e], gross: (d.o[x] / d.o[e] - 1) * 100, hold: CFG.dropHold });
+      i = x;
+    } else i++;
+  }
+  return trades;
+}
+
+function stratMomentum(mode){
+  var trades = [], base = { s: 0, n: 0 }, tsSet = {};
+  names.forEach(function(nm){
+    var d = coins[nm], end = endIndex(d, mode);
+    for (var i = startIndex(d, mode); i < end; i++){
+      var day = Math.floor(d.t[i] / 86400);
+      if (((day + 4) % 7) === 0) tsSet[d.t[i]] = 1;
+    }
+  });
+  Object.keys(tsSet).map(Number).sort(function(a, b){ return a - b; }).forEach(function(T){
+    var cands = [];
+    names.forEach(function(nm){
+      var d = coins[nm], end = endIndex(d, mode), i = d.idx[T];
+      if (i === undefined || i < CFG.momLook || i + 1 + CFG.momHold >= end) return;
+      if (!liquid(d, i)) return;
+      var e = i + 1, x = e + CFG.momHold, g = (d.o[x] / d.o[e] - 1) * 100;
+      base.s += g; base.n++;
+      cands.push({ nm: nm, ret: d.c[i] / d.c[i - CFG.momLook] - 1, te: d.t[e], gross: g });
+    });
+    cands.sort(function(a, b){ return b.ret - a.ret; });
+    cands.slice(0, CFG.momTop).forEach(function(c){ if (c.ret > 0) trades.push({ coin: c.nm, te: c.te, gross: c.gross, hold: CFG.momHold }); });
+  });
+  return { trades: trades, baseGross: base.n ? base.s / base.n : null };
+}
+
+function baselineH(mode, H){
+  var s = 0, n = 0;
+  names.forEach(function(nm){
+    var d = coins[nm], end = endIndex(d, mode);
+    for (var i = startIndex(d, mode); i < end; i++){
+      if (!liquid(d, i)) continue;
+      var e = i + 1, x = e + H; if (x >= end) break;
+      s += (d.o[x] / d.o[e] - 1) * 100; n++;
+    }
+  });
+  return n ? s / n : null;
+}
+
+function summarize(trades, cost, baseGross){
+  var n = trades.length;
+  if (!n) return { n: 0 };
+  var tr = trades.slice().sort(function(a, b){ return a.te - b.te; });
+  var nets = tr.map(function(t){ return t.gross - cost; });
+  var avgNet = mean(nets), avgGross = mean(tr.map(function(t){ return t.gross; }));
+  var sorted = nets.slice().sort(function(a, b){ return a - b; });
+  var med = n % 2 ? sorted[(n - 1) / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
+  var wins = nets.filter(function(x){ return x > 0; }).length;
+  var cut = Math.ceil(CFG.trimPct * n), trimmed = sorted.slice(0, n - cut), avgTrim = trimmed.length ? mean(trimmed) : null;
+  var half = Math.floor(n / 2), h1 = half ? mean(nets.slice(0, half)) : null, h2 = half ? mean(nets.slice(half)) : null;
+  var months = {};
+  tr.forEach(function(t, i){ var m = ym(t.te); (months[m] = months[m] || []).push(nets[i]); });
+  var mk = Object.keys(months).sort();
+  var eligible = mk.filter(function(m){ return months[m].length >= CFG.monthMinTrades; });
+  var posN = eligible.filter(function(m){ return mean(months[m]) > 0; }).length;
+  var posShare = eligible.length ? posN / eligible.length : null;
+  var edge = baseGross === null ? null : avgGross - baseGross;
+  var c = [
+    n >= CFG.minTrades && mk.length >= CFG.minMonths,
+    avgNet > 0 && edge !== null && edge >= CFG.minEdgePP,
+    avgTrim !== null && avgTrim > 0,
+    h1 !== null && h1 > 0 && h2 !== null && h2 > 0,
+    posShare !== null && posShare >= CFG.monthPosShare
+  ];
+  return { n: n, months: mk.length, avgGross: avgGross, avgNet: avgNet, med: med, win: 100 * wins / n, avgTrim: avgTrim, h1: h1, h2: h2,
+           posShare: posShare, eligible: eligible.length, edge: edge, baseGross: baseGross, c: c, monthRows: mk.map(function(m){ return { m: m, n: months[m].length, avg: mean(months[m]) }; }) };
+}
+function mark(ok){ return ok ? "<span class='up'>&#10003;</span>" : "<span class='dn'>&#10007;</span>"; }
+
+function runTest(mode){
+  if (!coins){ setStatus("bad", "Load the data first."); return; }
+  var cost = parseFloat(document.getElementById("cost").value);
+  if (isNaN(cost)) cost = 1;
+  if (mode === "hold"){
+    var log = lsGet(), prev = log.filter(function(x){ return x.v === VERSION; });
+    var msg = "The holdout (2026-01-01 onward) should be run ONCE per rule version, after the rules are final. Run it now?";
+    if (prev.length) msg = "You already ran the holdout for version " + VERSION + " on " + prev[0].t + ". Running it again is not a fair test. Continue anyway?";
+    if (!confirm(msg)) return;
+    log.push({ t: new Date().toISOString(), v: VERSION, cost: cost }); lsSet(log); showLog();
+  }
+  var rows = [], baseH = {};
+  var don = [], bnc = [];
+  names.forEach(function(nm){ var d = coins[nm]; don = don.concat(stratDonchian(d, nm, mode)); bnc = bnc.concat(stratBounce(d, nm, mode)); });
+  var holds = don.map(function(t){ return t.hold; }).sort(function(a, b){ return a - b; });
+  var hMed = holds.length ? Math.max(1, Math.round(holds[Math.floor(holds.length / 2)])) : 1;
+  var mom = stratMomentum(mode);
+  var defs = [
+    ["Rule 1: 20-day breakout (hold about " + hMed + " days)", don, baselineH(mode, hMed)],
+    ["Rule 2: weekly top-5 momentum (7 days)", mom.trades, mom.baseGross],
+    ["Rule 3: oversold bounce (5 days)", bnc, baselineH(mode, CFG.dropHold)]
+  ];
+  var title = mode === "train" ? "Training period (before 2026-01-01): for checking the code, not the official result" : "HOLDOUT (2026-01-01 onward): official result for version " + VERSION;
+  var t = "<h2>" + title + "</h2>" + (cost !== 1 ? "<div class='sub warnc'>Cost is " + cost + "%, not the official 1.0%: exploratory only.</div>" : "") +
+    "<div class='wrap'><table><tr><th>Rule</th><th>Trades</th><th>Months</th><th>Avg gross</th><th>Random baseline</th><th>Edge vs baseline</th><th>Avg after cost</th><th>Median</th><th>Win %</th><th>Without best 5%</th><th>1st half</th><th>2nd half</th><th>Months positive</th><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th><th>Verdict</th></tr>";
+  defs.forEach(function(df){
+    var s = summarize(df[1], cost, df[2]);
+    if (!s.n){ t += "<tr><td>" + df[0] + "</td><td colspan='18' class='mut'>no completed trades</td></tr>"; return; }
+    var pass = s.c.every(function(x){ return x; });
+    var verdict = pass ? "<span class='up'>meets the bar (not proof)</span>" : "<span class='dn'>does not meet the bar</span>";
+    t += "<tr><td>" + df[0] + "</td><td>" + s.n + "</td><td>" + s.months + "</td><td>" + pct(s.avgGross) + "</td><td>" + pct(s.baseGross) + "</td><td>" + pct(s.edge) + "</td><td>" + pct(s.avgNet) + "</td><td>" + pct(s.med) + "</td><td>" + s.win.toFixed(0) + "%</td><td>" + pct(s.avgTrim) + "</td><td>" + pct(s.h1) + "</td><td>" + pct(s.h2) + "</td><td>" + (s.posShare === null ? "n/a" : (100 * s.posShare).toFixed(0) + "% of " + s.eligible) + "</td><td>" + mark(s.c[0]) + "</td><td>" + mark(s.c[1]) + "</td><td>" + mark(s.c[2]) + "</td><td>" + mark(s.c[3]) + "</td><td>" + mark(s.c[4]) + "</td><td>" + verdict + "</td></tr>";
+  });
+  t += "</table></div><div class='sub'>Checks: 1 = enough trades and months; 2 = after cost above zero and at least 0.5 points above baseline; 3 = still above zero without the best 5% of trades; 4 = above zero in both halves; 5 = at least 60% of months positive.</div>";
+  defs.forEach(function(df){
+    var s = summarize(df[1], cost, df[2]);
+    if (!s.n) return;
+    t += "<details><summary>" + df[0] + ": average after cost by month</summary><div class='wrap'><table><tr><th>Month</th><th>Trades</th><th>Avg after cost</th></tr>";
+    s.monthRows.forEach(function(r){ t += "<tr><td>" + r.m + "</td><td>" + r.n + "</td><td>" + pct(r.avg) + "</td></tr>"; });
+    t += "</table></div></details>";
+  });
+  document.getElementById("results").innerHTML = t;
+  var liq = 0, first = Infinity, last = 0;
+  names.forEach(function(nm){ var d = coins[nm]; for (var i = 19; i < d.t.length; i++) if (liquid(d, i)) liq++; if (d.t[0] < first) first = d.t[0]; if (d.t[d.t.length - 1] > last) last = d.t[d.t.length - 1]; });
+  document.getElementById("summary").textContent = "Coins loaded: " + names.length + ". Data from " + ymd(first) + " to " + ymd(last) + ". Liquid coin-days overall: " + liq + ".\nPeriod shown: " + (mode === "train" ? "training, signals before 2026-01-01 (trades finishing before 2026-01-01 only)" : "holdout, signals from 2026-01-01") + ". Round-trip cost: " + cost + "%.";
+  setStatus("ok", "Done: " + (mode === "train" ? "training" : "holdout") + " results below.");
+}
+function showLog(){
+  var log = lsGet();
+  document.getElementById("log").textContent = log.length ? log.map(function(x){ return x.t + "  version " + x.v + "  cost " + x.cost + "%"; }).join("\n") : "No holdout runs yet.";
+}
+showLog();
+</script>
+</body>
+</html>
