@@ -1,6 +1,6 @@
 # Crypto Futures Intelligence Scanner (analysis only)
 
-Last updated: Nov 18, 2026. Keep this file current whenever a rule version, file, or schedule changes.
+Last updated: Nov 24, 2026. Keep this file current whenever a rule version, file, or schedule changes.
 
 ## What this project is
 
@@ -66,14 +66,18 @@ Data formats:
 
 ## Testing plan and pass/fail bars (written in advance)
 
-- Checkpoint Mon Nov 16 (done), **first real read Mon Nov 23**, second read about Dec 7. Moved from Nov 16 / Nov 30 after the Nov 8 to 12 recorder outage (database full, about 3.5 days of data lost).
+- Checkpoint Nov 16 (done), **first real read done Nov 24: no signal meets its bar**; a second read (about Dec 7) only happens if the user chooses to keep testing. Moved from Nov 16 / Nov 30 after the Nov 8 to 12 recorder outage (database full, about 3.5 days of data lost).
 - Do not re-run reviews and read results between scheduled reads.
 - **Watch** (each direction): 50 or more completed entries over 20 or more distinct hours; hit rate at least 1.5x random coins; average move in the direction after 1.0% cost above zero and above the random-coin average; above zero in both halves.
 - **Pullback:** 50 or more completed setups over 7 or more days; waiting beats chasing and is above zero per setup after cost; above zero in both halves.
 - **Score leans:** 1-hour hold, 0.5% cost, 50 or more events over 20 or more hours, above zero after cost, beats baseline, above zero in both halves. Market-wide leans are shown separately from the rest.
 - Meeting a bar is still not proof. The earliest point to consider tiny real-size trading is mid December, and only if tests pass.
 
-## Results so far (Nov 16 checkpoint, two weeks after the freeze, 1.0% cost for radar, 0.5% for scores)
+## Results so far
+
+**Nov 24 first real read (about three weeks after the freeze):** every test fails its pre-written bar, with large samples (hundreds to thousands of events over 300 or more distinct hours) and a balanced market (38% short, 27% long, 35% no lean). Watch up 6.9% hit versus 5.2% for random coins, -1.13% after cost; Watch down 8.4% versus 5.6%, -0.82% after cost; pullback (303 setups, 19 days) chase -1.90% versus wait -1.72% per setup; main flags at 1 hour after cost: breakout -1.26%, pump -1.19%, breakdown -0.96%, dump -0.77%; score leans (4,266) LONG -0.57%, SHORT -0.46% after cost, neither better than random coins. Averages before cost are about the same as random coins, so these rules on this data carry no measurable directional information. The next-step decision (keep as a radar and journal, run one more pre-registered experiment, or wind down) is pending with the user. Do not present any signal as tradable.
+
+**Earlier Nov 16 checkpoint (1.0% cost for radar, 0.5% for scores):**
 
 No signal meets its bar, with large samples (hundreds of events over 160 or more distinct hours):
 - Watch finds volatile coins, not direction. Up: 6.8% hit a 5% move versus 4.9% for random coins, average -0.17% versus -0.16%, -1.17% after cost. Down: 9.6% versus 5.7%, +0.10% versus +0.16%, -0.90% after cost.
@@ -88,7 +92,7 @@ No signal meets its bar, with large samples (hundreds of events over 160 or more
 - "Rules is not defined" means `rules.js` is missing or has a syntax error.
 - Both recorders going red together means a shared cause (schedule, Cloudflare, or the database size limit). Check the Worker's Observability logs.
 - Storage: upgraded to Workers Paid on Nov 18 (10 GB per database) and the Worker's `limit_bytes` was set to 10000000000, so storage is no longer a near-term constraint. Radar writes go to `DB2`; `DB` holds futures plus the old radar archive (needed until the second read). Re-check `/db/size` and the health page if a recorder ever stops.
-- `review.html` loads at most 14 days of radar history until the cap is raised to 45 days (Step 49, Nov 16). Without that change the Nov 2 test start gets silently clipped after about Nov 17.
+- `review.html` loads up to 45 days of radar history (raised from 14 on Nov 16, Step 49). If testing continues past about Dec 17, raise the cap again or the Nov 2 start gets silently clipped.
 
 ## Not built yet (wait for test results)
 
