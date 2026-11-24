@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trend Test (BTC, ETH, SOL, XRP)</title>
+<style>
+  body{background:#0d1117;color:#e6edf3;font-family:-apple-system,Helvetica,Arial,sans-serif;margin:0;padding:12px;font-size:13px}
+  h1{font-size:18px;margin:0 0 2px}
+  h2{font-size:15px;margin:18px 0 4px;color:#58a6ff}
+  .sub{color:#8b949e;font-size:12px;margin-bottom:10px;line-height:1.5}
+  .bar{padding:9px;border-radius:8px;margin:10px 0}
+  .ok{background:#12351f;color:#3fb950}
+  .bad{background:#3d1417;color:#f85149}
+  .wait{background:#2a2410;color:#d29922}
+  .rule{background:#161b22;border-left:3px solid #58a6ff;padding:8px 10px;margin:10px 0;line-height:1.6}
+  .ctl label{margin-right:12px;color:#8b949e;display:inline-block;margin-bottom:6px}
+  input{background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:8px;font-size:14px;width:70px}
+  button{background:#21262d;color:#e6edf3;border:0;border-radius:8px;padding:8px 14px;font-size:14px;margin:0 6px 6px 0;cursor:pointer}
+  button.run{background:#238636}
+  .wrap{overflow-x:auto;margin-top:8px}
+  table{border-collapse:collapse;min-width:100%}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid #21262d;white-space:nowrap}
+  th{color:#8b949e;font-weight:600}
+  .up{color:#3fb950}.dn{color:#f85149}.mut{color:#8b949e}.warnc{color:#d29922}
+  .warn{color:#8b949e;font-size:11px;margin-top:14px;line-height:1.6}
+  pre{background:#161b22;padding:8px;border-radius:6px;white-space:pre-wrap;margin:6px 0}
+</style>
+</head>
+<body>
+<h1>Trend Test: 200-day average rule (BTC, ETH, SOL, XRP)</h1>
+<div class="sub">Version <span id="ver"></span>. Daily candles from Coinbase Exchange public data. Analysis only, no trading.</div>
+<div class="rule"><b>Pre-registered rules and bar, written before any results (Nov 24, 2026):</b><br>
+<b>Rule (per coin):</b> hold when the previous day's close is above its 200-day simple average, otherwise stay in cash. Trades at the next day's open. Round-trip cost 1.0% (0.5% per side).<br>
+<b>Data:</b> only the latest continuous stretch (no gap longer than 3 missing days). A coin counts toward the bar only with at least 3 years of it; others are informational. Combined result: equal-weight portfolio of the included coins, rebalanced daily.<br>
+<b>Compared with:</b> buy-and-hold of the same coins (one entry cost). This tests whether the rule is a sensible risk-managed way to hold them, not whether it beats buy-and-hold on return.<br>
+<b>The rule meets the bar only if ALL hold:</b> (1) at least 2 included coins and at least 30 completed trades in total; (2) combined annualized return after cost above zero; (3) at least 2 included coins individually above zero; (4) combined maximum drawdown at most 60% of buy-and-hold's AND a higher return-to-drawdown ratio (annualized return divided by maximum drawdown) than buy-and-hold; (5) combined annualized return above zero in BOTH halves of the period AND also with 150-day and 250-day averages (robustness only, not tuning). A pass is provisional: these are today's large survivors (selection bias), and the rule needs forward confirmation. Any change becomes a new version (t2).</div>
+<div class="ctl">
+  <label>Round-trip cost % <input id="cost" type="number" step="0.1" value="1.0"></label>
+  <button class="run" onclick="loadData(false)">Load data</button>
+  <button onclick="loadData(true)">Reload from Coinbase</button>
+  <button class="run" onclick="runTest()">Run test</button>
+</div>
+<div class="bar wait" id="status">Press "Load data". It takes about a minute (a few requests per coin).</div>
+<pre id="summary"></pre>
+<div id="results"></div>
+<h2>Run log (this browser)</h2>
+<pre id="log">No runs yet.</pre>
+<div class="warn">Known biases: BTC, ETH, SOL and XRP are chosen because they are large today, so holding them looks better than it would have to someone choosing earlier (selection and survivorship bias). Fills are assumed exactly at the open, which is optimistic; 1.0% round trip is meant to cover fees and slippage on large coins, and real costs may differ. Prices come from Coinbase and differ slightly from other venues. Returns are open to open. Daily rebalancing of the combined portfolio is a simplification. A bull-market-heavy history favors holding; a long bear market favors cash. Nothing here is financial advice, and a pass would not be proof.</div>
+<script>
+var CB = "https://api.exchange.coinbase.com";
+var VERSION = "t1";
+var PRODUCTS = ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD"];
+var CFG = { sma: 200, smaAlt: [150, 250], minYears: 3, minTrades: 30, minCoinsOk: 2, ddRatio: 0.6, gapDays: 4 };
+var data = {};
+document.getElementById("ver").textContent = VERSION;
+
+function setStatus(cls, t){ var s = document.getElementById("status"); s.className = "bar " + cls; s.textContent = t; }
+function sleep(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
+function mean(a){ if (!a.length) return null; var s = 0; for (var i = 0; i < a.length; i++) s += a[i]; return s / a.length; }
+function pct(v, d){ if (v === null || v === undefined || isNaN(v)) return "<span class='mut'>n/a</span>"; return "<span class='" + (v >= 0 ? "up" : "dn") + "'>" + (v >= 0 ? "+" : "") + (v * 100).toFixed(d === undefined ? 1 : d) + "%</span>"; }
+function plain(v, d){ return (v === null || v === undefined || isNaN(v)) ? "<span class='mut'>n/a</span>" : v.toFixed(d === undefined ? 2 : d); }
+function ymd(ts){ return new Date(ts * 1000).toISOString().slice(0, 10); }
+function mark(ok){ return ok ? "<span class='up'>&#10003;</span>" : "<span class='dn'>&#10007;</span>"; }
+function lsGet(){ try{ return JSON.parse(localStorage.getItem("trend_runs") || "[]"); } catch(e){ return []; } }
+function lsSet(v){ try{ localStorage.setItem("trend_runs", JSON.stringify(v)); } catch(e){} }
+function showLog(){ var log = lsGet(); document.getElementById("log").textContent = log.length ? log.map(function(x){ return x.t + "  version " + x.v + "  cost " + x.cost + "%"; }).join("\n") : "No runs yet."; }
+
+function idb(){ return new Promise(function(res, rej){ var q = indexedDB.open("scanner_daily", 1); q.onupgradeneeded = function(){ q.result.createObjectStore("kv"); }; q.onsuccess = function(){ res(q.result); }; q.onerror = function(){ rej(q.error); }; }); }
+async function idbGet(k){ try{ var db = await idb(); return await new Promise(function(res, rej){ var t = db.transaction("kv").objectStore("kv").get(k); t.onsuccess = function(){ res(t.result); }; t.onerror = function(){ rej(t.error); }; }); } catch(e){ return null; } }
+async function idbSet(k, v){ try{ var db = await idb(); await new Promise(function(res, rej){ var t = db.transaction("kv", "readwrite").objectStore("kv").put(v, k); t.onsuccess = function(){ res(); }; t.onerror = function(){ rej(t.error); }; }); } catch(e){} }
+
+async function fetchCoin(pid){
+  var secs = 86400, span = 299 * secs;
+  var end = Math.floor(Date.now() / 1000 / secs) * secs - secs;
+  var map = {}, retries = 0;
+  for (var w = 0; w < 80; w++){
+    var start = end - span;
+    var url = CB + "/products/" + pid + "/candles?granularity=86400&start=" + encodeURIComponent(new Date(start * 1000).toISOString()) + "&end=" + encodeURIComponent(new Date(end * 1000).toISOString());
+    var r = await fetch(url);
+    if (r.status === 404){ if (w === 0) return null; break; }
+    if (r.status === 429 && retries < 6){ retries++; await sleep(3000); w--; continue; }
+    if (!r.ok) throw new Error(pid + ": HTTP " + r.status);
+    var arr = await r.json();
+    if (!Array.isArray(arr) || !arr.length) break;
+    var oldest = Infinity;
+    arr.forEach(function(c){ map[c[0]] = c; if (c[0] < oldest) oldest = c[0]; });
+    end = Math.min(start, oldest) - secs;
+    await sleep(250);
+  }
+  var ts = Object.keys(map).map(Number).sort(function(a, b){ return a - b; });
+  if (!ts.length) return null;
+  var s = ts.length - 1;
+  while (s > 0 && ts[s] - ts[s - 1] <= CFG.gapDays * secs) s--;
+  var d = { t: [], o: [], c: [] };
+  for (var i = s; i < ts.length; i++){ var c = map[ts[i]]; d.t.push(c[0]); d.o.push(c[3]); d.c.push(c[4]); }
+  d.totalFound = ts.length;
+  return d;
+}
+
+async function loadData(force){
+  try{
+    if (!force){
+      var cached = await idbGet("coinbase_v1");
+      if (cached && cached.fetched && (Date.now() - cached.fetched) < 12 * 3600 * 1000){
+        data = cached.data;
+        setStatus("ok", "Loaded " + Object.keys(data).length + " coins from this browser's saved copy (fetched " + new Date(cached.fetched).toLocaleString() + ").");
+        return;
+      }
+    }
+    var out = {};
+    for (var i = 0; i < PRODUCTS.length; i++){
+      setStatus("wait", "Loading " + PRODUCTS[i] + " (" + (i + 1) + " of " + PRODUCTS.length + ")...");
+      var d = await fetchCoin(PRODUCTS[i]);
+      if (d) out[PRODUCTS[i].replace("-USD", "")] = d;
+    }
+    if (!Object.keys(out).length) throw new Error("No data returned.");
+    data = out;
+    await idbSet("coinbase_v1", { fetched: Date.now(), data: out });
+    setStatus("ok", "Loaded " + Object.keys(out).length + " coins from Coinbase.");
+  } catch(e){
+    setStatus("bad", "FAILED: " + e.message + (/fetch/i.test(e.message) ? " (If this says 'Failed to fetch', your browser may be blocking requests to Coinbase. Tell Claude.)" : ""));
+  }
+}
+
+function runCoin(d, L, cost){
+  var n = d.t.length, half = cost / 200, i;
+  var sma = new Array(n).fill(null), s = 0;
+  for (i = 0; i < n; i++){ s += d.c[i]; if (i >= L) s -= d.c[i - L]; if (i >= L - 1) sma[i] = s / L; }
+  var rows = [], pos = 0, trades = [], tradeEq = 1, inTrade = false, held = 0;
+  for (var k = L; k < n - 1; k++){
+    var state = d.c[k - 1] > sma[k - 1] ? 1 : 0;
+    var r = d.o[k + 1] / d.o[k] - 1;
+    var switched = state !== pos;
+    var sret = (state ? (1 + r) : 1) * (switched ? (1 - half) : 1) - 1;
+    var bret = (1 + r) * (k === L ? (1 - half) : 1) - 1;
+    if (state){ held++; }
+    if (state && !pos){ inTrade = true; tradeEq = (1 - half) * (1 + r); }
+    else if (state && pos){ tradeEq *= (1 + r); }
+    else if (!state && pos){ if (inTrade){ trades.push(tradeEq * (1 - half) - 1); } inTrade = false; }
+    pos = state;
+    rows.push({ t: d.t[k], s: sret, b: bret });
+  }
+  return { rows: rows, trades: trades, exposure: rows.length ? held / rows.length : 0 };
+}
+function metrics(rets){
+  var eq = 1, peak = 1, mdd = 0;
+  for (var i = 0; i < rets.length; i++){ eq *= (1 + rets[i]); if (eq > peak) peak = eq; var dd = 1 - eq / peak; if (dd > mdd) mdd = dd; }
+  var years = rets.length / 365.25;
+  var cagr = years > 0 ? Math.pow(eq, 1 / years) - 1 : null;
+  return { total: eq - 1, cagr: cagr, mdd: mdd, calmar: (mdd > 0 && cagr !== null) ? cagr / mdd : null, years: years };
+}
+function combine(list){
+  var byT = {};
+  list.forEach(function(res){ res.rows.forEach(function(r){ var e = byT[r.t] || (byT[r.t] = { s: [], b: [] }); e.s.push(r.s); e.b.push(r.b); }); });
+  var ts = Object.keys(byT).map(Number).sort(function(a, b){ return a - b; });
+  return { t: ts, s: ts.map(function(t){ return mean(byT[t].s); }), b: ts.map(function(t){ return mean(byT[t].b); }) };
+}
+
+function runTest(){
+  if (!Object.keys(data).length){ setStatus("bad", "Load the data first."); return; }
+  var cost = parseFloat(document.getElementById("cost").value);
+  if (isNaN(cost)) cost = 1;
+  var log = lsGet();
+  if (log.some(function(x){ return x.v === VERSION; }) && !confirm("You already ran version " + VERSION + ". The rules are fixed, so re-running is harmless, but please do not change anything based on the result. Run again?")) return;
+  log.push({ t: new Date().toISOString(), v: VERSION, cost: cost }); lsSet(log); showLog();
+
+  var coins = Object.keys(data), included = [], infoOnly = [];
+  var h = "<h2>Data used</h2><div class='wrap'><table><tr><th>Coin</th><th>First day used</th><th>Last day</th><th>Days</th><th>Years</th><th>Candles found in total</th><th>Counts toward the bar?</th></tr>";
+  coins.forEach(function(c){
+    var d = data[c], yrs = d.t.length / 365.25, ok = yrs >= CFG.minYears;
+    (ok ? included : infoOnly).push(c);
+    h += "<tr><td>" + c + "</td><td>" + ymd(d.t[0]) + "</td><td>" + ymd(d.t[d.t.length - 1]) + "</td><td>" + d.t.length + "</td><td>" + yrs.toFixed(1) + "</td><td>" + d.totalFound + "</td><td>" + (ok ? "<span class='up'>yes</span>" : "<span class='warnc'>no (under 3 years, informational only)</span>") + "</td></tr>";
+  });
+  h += "</table></div>";
+
+  var perCoin = {};
+  coins.forEach(function(c){ perCoin[c] = runCoin(data[c], CFG.sma, cost); });
+  h += "<h2>Per coin (" + CFG.sma + "-day average rule vs buy-and-hold, after cost" + (cost !== 1 ? "; cost " + cost + "%, exploratory" : "") + ")</h2><div class='wrap'><table><tr><th>Coin</th><th>Completed trades</th><th>Win %</th><th>Time in market</th><th>Rule: total return</th><th>Rule: per year</th><th>Rule: max drawdown</th><th>Hold: total return</th><th>Hold: per year</th><th>Hold: max drawdown</th><th>Rule: return/drawdown</th><th>Hold: return/drawdown</th></tr>";
+  var coinPos = 0, totalTrades = 0;
+  coins.forEach(function(c){
+    var res = perCoin[c], ms = metrics(res.rows.map(function(r){ return r.s; })), mb = metrics(res.rows.map(function(r){ return r.b; }));
+    var inc = included.indexOf(c) >= 0;
+    if (inc){ totalTrades += res.trades.length; if (ms.cagr > 0) coinPos++; }
+    var wins = res.trades.filter(function(x){ return x > 0; }).length;
+    h += "<tr><td>" + c + (inc ? "" : " <span class='mut'>(info only)</span>") + "</td><td>" + res.trades.length + "</td><td>" + (res.trades.length ? (100 * wins / res.trades.length).toFixed(0) + "%" : "n/a") + "</td><td>" + (100 * res.exposure).toFixed(0) + "%</td><td>" + pct(ms.total, 0) + "</td><td>" + pct(ms.cagr) + "</td><td>" + pct(-ms.mdd, 0) + "</td><td>" + pct(mb.total, 0) + "</td><td>" + pct(mb.cagr) + "</td><td>" + pct(-mb.mdd, 0) + "</td><td>" + plain(ms.calmar) + "</td><td>" + plain(mb.calmar) + "</td></tr>";
+  });
+  h += "</table></div>";
+
+  var checks = [false, false, false, false, false], comb = null;
+  if (included.length){
+    comb = combine(included.map(function(c){ return perCoin[c]; }));
+    var ms2 = metrics(comb.s), mb2 = metrics(comb.b);
+    var half = Math.floor(comb.t.length / 2);
+    var h1 = metrics(comb.s.slice(0, half)), h2 = metrics(comb.s.slice(half));
+    var alt = CFG.smaAlt.map(function(L){
+      var cb = combine(included.map(function(c){ return runCoin(data[c], L, cost); }));
+      return { L: L, m: metrics(cb.s) };
+    });
+    checks[0] = included.length >= CFG.minCoinsOk && totalTrades >= CFG.minTrades;
+    checks[1] = ms2.cagr !== null && ms2.cagr > 0;
+    checks[2] = coinPos >= 2;
+    checks[3] = mb2.mdd > 0 && ms2.mdd <= CFG.ddRatio * mb2.mdd && ms2.calmar !== null && mb2.calmar !== null && ms2.calmar > mb2.calmar;
+    checks[4] = h1.cagr > 0 && h2.cagr > 0 && alt.every(function(a){ return a.m.cagr > 0; });
+    h += "<h2>Combined (equal weight of " + included.join(", ") + "; " + comb.t.length + " days, " + ymd(comb.t[0]) + " to " + ymd(comb.t[comb.t.length - 1]) + ")</h2><div class='wrap'><table><tr><th></th><th>Total return</th><th>Per year</th><th>Max drawdown</th><th>Return/drawdown</th></tr>" +
+      "<tr><td>Rule (200-day average)</td><td>" + pct(ms2.total, 0) + "</td><td>" + pct(ms2.cagr) + "</td><td>" + pct(-ms2.mdd, 0) + "</td><td>" + plain(ms2.calmar) + "</td></tr>" +
+      "<tr><td>Buy and hold</td><td>" + pct(mb2.total, 0) + "</td><td>" + pct(mb2.cagr) + "</td><td>" + pct(-mb2.mdd, 0) + "</td><td>" + plain(mb2.calmar) + "</td></tr></table></div>";
+    h += "<div class='sub'>Rule per year in the first half: " + pct(h1.cagr) + ", second half: " + pct(h2.cagr) + ". With a 150-day average: " + pct(alt[0].m.cagr) + " per year; with a 250-day average: " + pct(alt[1].m.cagr) + " per year. Completed trades across included coins: " + totalTrades + ".</div>";
+  }
+  var pass = checks.every(function(x){ return x; });
+  h += "<h2>Bar</h2><div class='wrap'><table><tr><th>Check</th><th>Result</th></tr>" +
+    "<tr><td>1. At least 2 included coins and 30 completed trades</td><td>" + mark(checks[0]) + "</td></tr>" +
+    "<tr><td>2. Combined return per year after cost above zero</td><td>" + mark(checks[1]) + "</td></tr>" +
+    "<tr><td>3. At least 2 included coins individually above zero</td><td>" + mark(checks[2]) + "</td></tr>" +
+    "<tr><td>4. Max drawdown at most 60% of buy-and-hold, and better return/drawdown</td><td>" + mark(checks[3]) + "</td></tr>" +
+    "<tr><td>5. Above zero in both halves and with 150- and 250-day averages</td><td>" + mark(checks[4]) + "</td></tr></table></div>" +
+    "<div class='bar " + (pass ? "ok" : "bad") + "'>" + (pass ? "Meets the bar (provisional, needs forward confirmation)." : "Does not meet the bar.") + "</div>";
+  document.getElementById("results").innerHTML = h;
+  document.getElementById("summary").textContent = "Coins loaded: " + coins.join(", ") + ". Included in the bar: " + (included.join(", ") || "none") + (infoOnly.length ? ". Informational only: " + infoOnly.join(", ") : "") + ". Round-trip cost: " + cost + "%.";
+  setStatus("ok", "Done: results below.");
+}
+showLog();
+</script>
+</body>
+</html>
